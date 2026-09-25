@@ -186,6 +186,7 @@ Needs `nasm`, a GCC that can target i386 (`-m32`), and binutils.
 ```
 python3 build.py              # build/cputest.rom and build/cputest.img
 python3 build.py --dump       # also prints one line per defined result (D) and raw result (R)
+python3 build.py --dump bcd   # the same, only for groups whose name starts with bcd
 python3 build.py --host       # build/cputest: a static i386 Linux ELF of the same harness
 ```
 

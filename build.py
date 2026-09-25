@@ -17,6 +17,17 @@ CFLAGS = [
 ]
 
 
+def dump_flags():
+    """--dump, optionally followed by a group-name prefix: -DDUMP and
+    -DDUMP_ONLY="prefix"."""
+    if "--dump" not in sys.argv:
+        return []
+    i = sys.argv.index("--dump")
+    if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("-"):
+        return ["-DDUMP", '-DDUMP_ONLY="%s"' % sys.argv[i + 1]]
+    return ["-DDUMP"]
+
+
 def run(cmd):
     print(" ".join(cmd))
     subprocess.run(cmd, check=True, cwd=OUT)
@@ -30,7 +41,7 @@ MUSL_GCC = os.path.expanduser(
 def build_host():
     """The harness as a static i386 ELF: runs on this Linux host and on
     CORSAC alike, and on anything back to a 486 (no CMOV)."""
-    extra = ["-DDUMP"] if "--dump" in sys.argv else []
+    extra = dump_flags()
     out = "cputest-dump" if extra else "cputest"
     run([MUSL_GCC, "-static", "-no-pie", "-fno-pie", "-march=i486", "-mtune=i486", "-O2", "-std=gnu11", "-DHOSTTEST"] + extra + [
          "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-unused-function",
@@ -43,7 +54,7 @@ def main():
         build_host()
         return
     run(["nasm", "-f", "elf32", "-o", "rt.o", os.path.join(HERE, "rt.asm")])
-    extra = ["-DDUMP"] if "--dump" in sys.argv else []
+    extra = dump_flags()
     run(["gcc"] + CFLAGS + extra + ["-I", HERE, "-c", "-o", "harness.o", os.path.join(HERE, "harness.c")])
     run(["ld", "-m", "elf_i386", "-T", os.path.join(HERE, "payload.ld"), "-o", "payload.elf", "rt.o", "harness.o"])
     run(["objcopy", "-O", "binary", "payload.elf", "payload.bin"])
