@@ -149,6 +149,7 @@ between versions until the group itself changes.
 | 250 | `r3.code16` | 16-bit code at CPL 3 (Win16): arithmetic, SETcc, memory, the stack, CALL/RET, far calls through 32-bit gates, I/O |
 | 251 | `r1.code16` | 16-bit code at CPL 1 |
 | 252 | `r3.popseg` | POP DS/ES/FS/GS/SS at CPL 3 of good, other-ring, DPL-0, null, TSS, code, execute-only, read-only and missing selectors |
+| 253 | `r1.popseg` | the same at CPL 1 |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
