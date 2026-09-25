@@ -121,6 +121,7 @@ between versions until the group itself changes.
 | 222 | `r1.priv` | every privileged instruction at CPL 1: #GP(0) |
 | 223 | `r1.iopl1` | ring 1 with IOPL 1, as CORSAC runs it: ports past the bitmap, CLI, POPF; still no privileged instructions |
 | 224 | `r1.io` | the I/O bitmap and IOPL matrix at CPL 1 |
+| 225 | `r1.popf` | POPF at CPL 1 |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
