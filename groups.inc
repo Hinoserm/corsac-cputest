@@ -491,6 +491,7 @@ static const struct group_def groups[] = {
     G(group_r1_code16),
     G(group_r3_popseg),
     G(group_r1_popseg),
+    G(group_gateparams),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
