@@ -326,6 +326,8 @@ e820_read(void)
     for (unsigned i = 0; i < g_e820_n; i++) {
         const struct e820_entry *e = &g_e820[i];
         uint64_t                 end = e->base + e->len;
+        if (e->len == 0)
+            continue; /* an empty record, whatever its type: some BIOSes end with one */
         if (e->type == 0 || end < e->base) { /* no such type; wraps past 2^64 */
             g_e820_status = E820_CORRUPT;
             g_hi_page     = 0;

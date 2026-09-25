@@ -188,25 +188,30 @@ madt_read(void)
     }
     if (!rsdp)
         return; /* MP_NONE */
-    g_mp.status  = MP_MADT_BAD;
     uint32_t rsdt = phys32(rsdp + 16);
+    g_mp.status   = MP_MADT_BAD; /* until the RSDT checks out */
     if (!reachable(rsdt, 36) || !sig_at(rsdt, "RSDT", 4))
         return;
     uint32_t len = phys32(rsdt + 4);
     if (len < 36 || len > 0x10000 || !reachable(rsdt, len) || sum8(rsdt, len))
         return;
+    g_mp.status = MP_NONE; /* a good RSDT with no MADT in it: an ACPI 1.0 board without APICs */
     for (uint32_t e = rsdt + 36; e + 4 <= rsdt + len; e += 4) {
         uint32_t t = phys32(e);
         if (!reachable(t, 44) || !sig_at(t, "APIC", 4))
             continue;
         uint32_t tlen = phys32(t + 4);
-        if (tlen < 44 || tlen > 0x10000 || !reachable(t, tlen) || sum8(t, tlen))
+        if (tlen < 44 || tlen > 0x10000 || !reachable(t, tlen) || sum8(t, tlen)) {
+            g_mp.status = MP_MADT_BAD;
             return;
+        }
         g_mp.lapic = phys32(t + 36);
         for (uint32_t p = t + 44; p + 2 <= t + tlen;) {
             uint8_t type = phys(p)[0], elen = phys(p)[1];
-            if (elen < 2 || p + elen > t + tlen)
+            if (elen < 2 || p + elen > t + tlen) {
+                g_mp.status = MP_MADT_BAD;
                 return;
+            }
             if (type == 0 && elen >= 8) /* flags bit 0: enabled; the MADT has no BSP flag */
                 mp_add_cpu(phys(p)[3], 0, phys(p)[4] & 1, 0);
             else if (type == 1 && elen >= 12)
