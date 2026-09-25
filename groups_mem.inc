@@ -126,3 +126,76 @@ group_lea(void)
     }
     group_end(name);
 }
+
+/* ---- ALU operations on memory ---------------------------------------------- */
+
+static const uint8_t  imm8_edges[]  = { 0x00, 0x01, 0x7f, 0x80, 0xff };
+static const uint32_t imm32_edges[] = { 0x00000000, 0x7fffffff, 0x80000000, 0xffffffff, 12345 };
+
+/* ADD OR ADC SBB AND SUB XOR CMP with memory: r/m,r and r,r/m, 80/81/83
+   with immediates at their edges (rotating), every size, LOCK on each
+   memory destination (#UD for CMP), and a misaligned dword. ADC and SBB
+   read CF: every producer, unlocked. */
+static void
+group_alu_mem(void)
+{
+    const char    *name = "alu.mem";
+    struct variant v    = { .group = name, .fx = FX_ALU, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+    unsigned       k    = 0;
+    group_begin(name);
+    for (int op = 0; op < 8; op++) {
+        int reads_cf = op == 2 || op == 3;
+        for (int form = 0; form < 4; form++) { /* op r/m,r; op r,r/m; 80/81 imm; 83 imm8 */
+            for (int size = 8; size <= 32; size *= 2) {
+                if (form == 3 && size == 8)
+                    continue;
+                for (int lock = 0; lock < (form == 1 ? 1 : 2); lock++) {
+                    int n = 0;
+                    if (lock)
+                        v.target[n++] = 0xf0;
+                    if (size == 16)
+                        v.target[n++] = 0x66;
+                    int w = size != 8;
+                    switch (form) {
+                        case 0:
+                        case 1:
+                            v.target[n++] = (op << 3) | (form << 1) | w;
+                            v.target[n++] = 0x03 | ((size == 8 ? 6 : R_EDX) << 3); /* DH / EDX, [ebx] */
+                            break;
+                        case 2:
+                            v.target[n++] = 0x80 | w;
+                            v.target[n++] = 0x03 | (op << 3);
+                            if (size == 8)
+                                v.target[n++] = imm8_edges[k % sizeof(imm8_edges)];
+                            else {
+                                put_le(v.target + n, imm32_edges[k % 5], size / 8);
+                                n += size / 8;
+                            }
+                            break;
+                        default:
+                            v.target[n++] = 0x83;
+                            v.target[n++] = 0x03 | (op << 3);
+                            v.target[n++] = imm8_edges[k % sizeof(imm8_edges)];
+                            break;
+                    }
+                    k++;
+                    v.target_len = n;
+                    v.fx_arg     = op;
+                    v.faults_ok  = lock && op == 7;
+                    if (reads_cf && !lock)
+                        run_flags(&v, 1);
+                    else
+                        run_plain(&v, 2);
+                }
+            }
+        }
+        /* op [ebx+31], edx: misaligned */
+        v.target[0]  = (op << 3) | 1;
+        v.target[1]  = 0x43 | (R_EDX << 3);
+        v.target[2]  = 0x1f;
+        v.target_len = 3;
+        v.faults_ok  = 0;
+        run_plain(&v, 2);
+    }
+    group_end(name);
+}

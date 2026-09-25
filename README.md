@@ -84,6 +84,7 @@ between versions until the group itself changes.
 | 28 | `segments`    | FS/GS loads of good, null, 16-bit, RPL-3, out-of-GDT and LDT selectors (#GP), limits, LFS/LGS, MOV from Sreg, LAR LSL VERR VERW |
 | 29 | `exhaust8`    | every input of the 8-bit flag math, walked by a loop inside the test: ADD..CMP × AL × BL × CF, INC DEC NEG NOT, shifts and rotates × counts 0-31, DAA DAS AAA AAS × AF × CF, MUL IMUL, AAM AAD, SAHF |
 | 30 | `lea`         | every 32-bit ModRM form, SIB with every base and every index×scale at each mod, every 16-bit form, displacement edges, ESP as the base |
+| 31 | `alu.mem`     | the eight ALU ops on memory: both directions, 80/81/83 immediates at their edges, every size, LOCK (#UD on CMP), misaligned |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
