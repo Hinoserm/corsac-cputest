@@ -1273,6 +1273,17 @@ group_far(void)
         v.arg2       = k;
         run_plain(&v, 1);
     }
+    /* RETF to a data segment at the same CPL (flat data, 10h): #GP(10h),
+       with and without a stack adjustment. */
+    static const struct {
+        uint8_t len, b[8];
+    } data_cs[] = { { SEQ(0x6a, 0x10, 0x6a, 0x00, 0xcb) }, { SEQ(0x6a, 0x10, 0x6a, 0x00, 0xca, 0x08, 0x00) } };
+    struct variant w = { .group = name, .faults_ok = 1 };
+    for (int k = 0; k < 2; k++) {
+        memcpy(w.target, data_cs[k].b, data_cs[k].len);
+        w.target_len = data_cs[k].len;
+        run_plain(&w, 1);
+    }
     group_end(name);
 }
 
@@ -1302,6 +1313,12 @@ group_int(void)
         { 0, SEQ(0xf0, 0x90) }, /* LOCK NOP: #UD */
         { 0, SEQ(0x8d, 0xc0) }, /* LEA with a register: #UD (not LES/LDS: VEX on newer CPUs) */
         { 0, SEQ(0x8e, 0xc8) }, /* MOV CS, AX: #UD */
+        { 0, SEQ(0x0f, 0x20, 0xc8) }, /* MOV EAX, CR1: #UD */
+        { 0, SEQ(0x0f, 0x22, 0xc8) }, /* MOV CR1, EAX: #UD */
+        { 0, SEQ(0x0f, 0x20, 0xe8) }, /* MOV EAX, CR5: #UD */
+        { 0, SEQ(0x0f, 0x20, 0xf8) }, /* MOV EAX, CR7: #UD */
+        { 0, SEQ(0x0f, 0xc7, 0x03) }, /* 0F C7 /0 with memory: #UD */
+        { 0, SEQ(0x0f, 0xc7, 0x13) }, /* 0F C7 /2 with memory: #UD */
     };
     const char    *name = "int.ud";
     struct variant v    = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_into };
@@ -1314,6 +1331,32 @@ group_int(void)
             run_flags(&v, 1);
         else
             run_plain(&v, 1);
+    }
+    /* RF in the EFLAGS image a fault pushes (bit 16 kept in the result):
+       #UD, #GP from a null FS, #DE, #BR. Raw only: the manuals disagree
+       across models. */
+    static const struct {
+        uint8_t len, b[12];
+    } rf[] = {
+        { SEQ(0x0f, 0x0b) },                                                /* ud2 */
+        { SEQ(0x66, 0xb8, 0x00, 0x00, 0x8e, 0xe0, 0x64, 0x8b, 0x00) },      /* fs = 0; mov eax, fs:[eax] */
+        { SEQ(0x31, 0xc9, 0xf7, 0xf1) },                                    /* div ecx by 0 */
+        { SEQ(0xc7, 0x03, 0x05, 0, 0, 0, 0xc7, 0x43, 0x04, 0x01, 0, 0) },  /* bounds 5..1 */
+    };
+    v.flags_mask = 0x10cd5;
+    v.defmask    = dm_fxarg;
+    v.fx_arg     = 0;
+    for (unsigned i = 0; i < sizeof(rf) / sizeof(rf[0]); i++) {
+        int n = rf[i].len;
+        memcpy(v.target, rf[i].b, n);
+        if (i == 3) { /* bound eax, [ebx]: out of 5..1 whatever EAX is */
+            v.target[n++] = 0x62;
+            v.target[n++] = 0x03;
+        }
+        v.target_len = n;
+        v.fix_input  = i == 3 ? fix_mem_ebx : 0;
+        v.arg        = MEM_OFF;
+        run_plain(&v, 1);
     }
     group_end(name);
 }
