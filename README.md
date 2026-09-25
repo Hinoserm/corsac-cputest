@@ -195,6 +195,7 @@ between versions until the group itself changes.
 | 296 | `pg.rmw` | CMPXCHG, CMPXCHG8B, XADD and locked BTS/ADD on a read-only page (WP), compare equal and not; the dirty bit after a failed compare |
 | 297 | `pg.pde` | the alias page through a read-only or not-present PDE (WP): reads, writes, CR2, and the PDE's and PTE's A and D bits |
 | 298 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
+| 299 | `r3.pde` | the alias page from rings 1-3 with the PDE or PTE supervisor-only, the PDE read-only or not present |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

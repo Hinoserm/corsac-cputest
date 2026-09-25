@@ -403,3 +403,44 @@ group_pg_global(void)
     }
     pg_end(name);
 }
+
+/* ---- the PDE's bits from the rings ---------------------------------------------------------------- */
+
+/* The alias page from rings 3, 2 and 1 (CR0.WP clear) with the PDE or the
+   PTE made supervisor-only, the PDE read-only or not present: U/S and R/W
+   are the stricter of the two levels; supervisor code ignores U/S and,
+   without WP, R/W. */
+#define PDE_RD(r, hi) { r, 0, 1, SEQ(RD_ALIAS), 0, 128 | (hi) }
+#define PDE_WR(r, hi) { r, 0, 1, SEQ(WR_ALIAS), 0, 128 | (hi) }
+
+static void
+group_r3_pde(void)
+{
+    static const struct rx_seq seqs[] = {
+        PDE_RD(3, 0), PDE_WR(3, 0), PDE_RD(3, 1024), PDE_RD(3, 2048), PDE_RD(3, 256), PDE_WR(3, 256),
+        PDE_RD(3, 512), PDE_RD(1, 1024), PDE_WR(1, 256), PDE_WR(1, 2048), PDE_RD(2, 1024), PDE_WR(2, 256),
+    };
+    const char    *name = "r3.pde";
+    struct variant v    = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                            .fix_input = fix_ring, .arg2 = RF_SANDBOX, .fx = FX_CUSTOM, .defmask = dm_fxarg,
+                            .paging = 1 };
+#ifndef HOSTTEST
+    v.after_run = pg_reset;
+#endif
+    if (!ring_begin(name, 0, 0))
+        return;
+#ifndef HOSTTEST
+    if (!g_counting) {
+        g_pg_user = PTE_U;
+        pg_on(0);
+    }
+#endif
+    rx_run(&v, seqs, sizeof(seqs) / sizeof(seqs[0]));
+#ifndef HOSTTEST
+    if (!g_counting) {
+        pg_off();
+        g_pg_user = 0;
+    }
+#endif
+    ring_end(name, 0, 0);
+}
