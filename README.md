@@ -111,6 +111,7 @@ between versions until the group itself changes.
 | 207 | `pg.pse` | a 4 MB page (CR4.PSE) aliasing low memory: reads, writes and the PDE's accessed/dirty bits |
 | 208 | `pg.string` | REP MOVS/STOS/LODS running into a missing page part-way, both directions: registers at the fault and the memory done |
 | 209 | `pg.exec` | a jump and a call into a missing page: #PF on the fetch |
+| 210 | `pg.smc.alias` | code patched through a second mapping of its own page |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

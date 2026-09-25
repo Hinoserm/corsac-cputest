@@ -445,6 +445,7 @@ static const struct group_def groups[] = {
     G(group_pg_pse),
     G(group_pg_string),
     G(group_pg_exec),
+    G(group_pg_smc_alias),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
