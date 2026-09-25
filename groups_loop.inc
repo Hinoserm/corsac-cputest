@@ -10,7 +10,14 @@
  * only ever grows at the end.
  */
 
-enum { LK_BIN, LK_UN, LK_SHIFT, LK_SHD, LK_MUL, LK_DIV, LK_IDIV, LK_BS, LK_CMPXCHG, LK_PLAIN };
+enum { LK_BIN, LK_UN, LK_SHIFT, LK_SHD, LK_MUL, LK_DIV, LK_IDIV, LK_BS, LK_CMPXCHG, LK_PLAIN,
+       LK_MMX,   /* op mm0, mm1 over edge-biased lanes */
+       LK_MMXSH, /* shift mm0 by mm1: counts at the lane edges */
+       LK_3DN,   /* 3DNow! op mm0, mm1 over integers; mask 1: exact */
+       LK_3DNF,  /* the same over single-precision numbers */
+       LK_3DNX,  /* the K6-2+/III+ extensions, integers */
+       LK_3DNXF  /* the extensions over numbers */
+};
 
 static const struct loop_def {
     const char *name;
@@ -92,11 +99,62 @@ static const struct loop_def {
     { "loop.xadd32", LK_PLAIN, 32, 0x8d5, SEQ(0x0f, 0xc1, 0xd8) },
     { "loop.cmpxchg32", LK_CMPXCHG, 32, 0x8d5, SEQ(0x0f, 0xb1, 0xcb) },
     { "loop.bswap", LK_PLAIN, 32, 0x0c5, SEQ(0x0f, 0xc8) },
+    { "loop.punpcklbw", LK_MMX, 64, 0x001, SEQ(0x0f, 0x60, 0xc1) },
+    { "loop.punpcklwd", LK_MMX, 64, 0x001, SEQ(0x0f, 0x61, 0xc1) },
+    { "loop.punpckldq", LK_MMX, 64, 0x001, SEQ(0x0f, 0x62, 0xc1) },
+    { "loop.packsswb", LK_MMX, 64, 0x001, SEQ(0x0f, 0x63, 0xc1) },
+    { "loop.pcmpgtb", LK_MMX, 64, 0x001, SEQ(0x0f, 0x64, 0xc1) },
+    { "loop.pcmpgtw", LK_MMX, 64, 0x001, SEQ(0x0f, 0x65, 0xc1) },
+    { "loop.pcmpgtd", LK_MMX, 64, 0x001, SEQ(0x0f, 0x66, 0xc1) },
+    { "loop.packuswb", LK_MMX, 64, 0x001, SEQ(0x0f, 0x67, 0xc1) },
+    { "loop.punpckhbw", LK_MMX, 64, 0x001, SEQ(0x0f, 0x68, 0xc1) },
+    { "loop.punpckhwd", LK_MMX, 64, 0x001, SEQ(0x0f, 0x69, 0xc1) },
+    { "loop.punpckhdq", LK_MMX, 64, 0x001, SEQ(0x0f, 0x6a, 0xc1) },
+    { "loop.packssdw", LK_MMX, 64, 0x001, SEQ(0x0f, 0x6b, 0xc1) },
+    { "loop.pcmpeqb", LK_MMX, 64, 0x001, SEQ(0x0f, 0x74, 0xc1) },
+    { "loop.pcmpeqw", LK_MMX, 64, 0x001, SEQ(0x0f, 0x75, 0xc1) },
+    { "loop.pcmpeqd", LK_MMX, 64, 0x001, SEQ(0x0f, 0x76, 0xc1) },
+    { "loop.pmullw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xd5, 0xc1) },
+    { "loop.psubusb", LK_MMX, 64, 0x001, SEQ(0x0f, 0xd8, 0xc1) },
+    { "loop.psubusw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xd9, 0xc1) },
+    { "loop.pand", LK_MMX, 64, 0x001, SEQ(0x0f, 0xdb, 0xc1) },
+    { "loop.paddusb", LK_MMX, 64, 0x001, SEQ(0x0f, 0xdc, 0xc1) },
+    { "loop.paddusw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xdd, 0xc1) },
+    { "loop.pandn", LK_MMX, 64, 0x001, SEQ(0x0f, 0xdf, 0xc1) },
+    { "loop.pmulhw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xe5, 0xc1) },
+    { "loop.psubsb", LK_MMX, 64, 0x001, SEQ(0x0f, 0xe8, 0xc1) },
+    { "loop.psubsw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xe9, 0xc1) },
+    { "loop.por", LK_MMX, 64, 0x001, SEQ(0x0f, 0xeb, 0xc1) },
+    { "loop.paddsb", LK_MMX, 64, 0x001, SEQ(0x0f, 0xec, 0xc1) },
+    { "loop.paddsw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xed, 0xc1) },
+    { "loop.pxor", LK_MMX, 64, 0x001, SEQ(0x0f, 0xef, 0xc1) },
+    { "loop.pmaddwd", LK_MMX, 64, 0x001, SEQ(0x0f, 0xf5, 0xc1) },
+    { "loop.psubb", LK_MMX, 64, 0x001, SEQ(0x0f, 0xf8, 0xc1) },
+    { "loop.psubw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xf9, 0xc1) },
+    { "loop.psubd", LK_MMX, 64, 0x001, SEQ(0x0f, 0xfa, 0xc1) },
+    { "loop.paddb", LK_MMX, 64, 0x001, SEQ(0x0f, 0xfc, 0xc1) },
+    { "loop.paddw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xfd, 0xc1) },
+    { "loop.paddd", LK_MMX, 64, 0x001, SEQ(0x0f, 0xfe, 0xc1) },
 };
 
 #define LOOP_N 4096
 static uint32_t g_ltA[LOOP_N], g_ltB[LOOP_N], g_ltC[LOOP_N], g_ltD[LOOP_N];
+/* MMX operands: MM0 from A (low) and D (high), MM1 from B and C. */
 uint32_t        g_lraw, g_ldef;
+
+/* 32 bits of MMX operand: each 16-bit lane at a saturation edge a quarter
+   of the time, random otherwise. */
+static uint32_t
+mm_lanes(void)
+{
+    static const uint16_t edges[] = { 0x0000, 0x0001, 0x007f, 0x0080, 0x00ff, 0x7fff, 0x8000, 0xffff };
+    uint32_t              v       = 0;
+    for (int l = 0; l < 2; l++) {
+        uint32_t r = rnd();
+        v |= (uint32_t) ((r & 3) ? (r >> 8) & 0xffff : edges[(r >> 4) & 7]) << (16 * l);
+    }
+    return v;
+}
 
 /* The operand sets. A: EAX, B: EBX, C: ECX (the count in bits 0-4, the
    carry in bit 8), D: EDX. */
@@ -138,6 +196,29 @@ loop_fill(const struct loop_def *d)
             case LK_CMPXCHG:
                 if (!(rnd() & 3))
                     a = (a & ~m) | (b & m);
+                break;
+            case LK_MMX:
+            case LK_3DN:
+            case LK_3DNX:
+                a = mm_lanes();
+                x = mm_lanes();
+                b = mm_lanes();
+                c = mm_lanes();
+                break;
+            case LK_MMXSH: {
+                static const uint32_t counts[] = { 0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255 };
+                a = mm_lanes();
+                x = mm_lanes();
+                b = (rnd() & 1) ? counts[rnd() % (sizeof(counts) / sizeof(counts[0]))] : rnd() & 0x3f;
+                c = (rnd() & 15) ? 0 : rnd_operand(); /* the high half set: everything out */
+                break;
+            }
+            case LK_3DNF:
+            case LK_3DNXF:
+                a = rnd_float();
+                x = rnd_float();
+                b = rnd_float();
+                c = rnd_float();
                 break;
             default: break;
         }
@@ -188,11 +269,68 @@ emit_fold(struct emit *e, uint32_t *hash, int reg)
     e32(e, (uint32_t) hash);
 }
 
+/* The MMX and 3DNow! loops: MM0 = D:A, MM1 = C:B, the instruction, then
+   both halves of MM0 folded (into the defined checksum too, unless the
+   instruction rounds one way per model: 3DNow! with mask 0). */
+static void
+emit_loop_mmx(struct emit *e, const struct loop_def *d)
+{
+    emit_seq(e, 2, 0x31, 0xed); /* xor ebp, ebp */
+    emit_seq(e, 2, 0xc7, 0x05);
+    e32(e, (uint32_t) &g_lraw);
+    e32(e, 0);
+    emit_seq(e, 2, 0xc7, 0x05);
+    e32(e, (uint32_t) &g_ldef);
+    e32(e, 0);
+    uint8_t *top = e->p;
+    emit_seq(e, 3, 0x0f, 0x6e, 0x04); /* movd mm0, [A + ebp*4] */
+    e8(e, 0xad);
+    e32(e, (uint32_t) g_ltA);
+    emit_seq(e, 3, 0x0f, 0x6e, 0x14); /* movd mm2, [D + ebp*4] */
+    e8(e, 0xad);
+    e32(e, (uint32_t) g_ltD);
+    emit_seq(e, 4, 0x0f, 0x73, 0xf2, 0x20); /* psllq mm2, 32 */
+    emit_seq(e, 3, 0x0f, 0xeb, 0xc2);       /* por mm0, mm2 */
+    emit_seq(e, 3, 0x0f, 0x6e, 0x0c);       /* movd mm1, [B + ebp*4] */
+    e8(e, 0xad);
+    e32(e, (uint32_t) g_ltB);
+    emit_seq(e, 3, 0x0f, 0x6e, 0x14); /* movd mm2, [C + ebp*4] */
+    e8(e, 0xad);
+    e32(e, (uint32_t) g_ltC);
+    emit_seq(e, 4, 0x0f, 0x73, 0xf2, 0x20); /* psllq mm2, 32 */
+    emit_seq(e, 3, 0x0f, 0xeb, 0xca);       /* por mm1, mm2 */
+    ebytes(e, d->b, d->len);
+    emit_seq(e, 3, 0x0f, 0x7e, 0xc0);       /* movd eax, mm0 */
+    emit_seq(e, 4, 0x0f, 0x73, 0xd0, 0x20); /* psrlq mm0, 32 */
+    emit_seq(e, 3, 0x0f, 0x7e, 0xc3);       /* movd ebx, mm0 */
+    emit_fold(e, &g_lraw, R_EAX);
+    emit_fold(e, &g_lraw, R_EBX);
+    if (d->mask) {
+        emit_fold(e, &g_ldef, R_EAX);
+        emit_fold(e, &g_ldef, R_EBX);
+    }
+    e8(e, 0x45);                /* inc ebp */
+    emit_seq(e, 2, 0x81, 0xfd); /* cmp ebp, LOOP_N */
+    e32(e, LOOP_N);
+    emit_seq(e, 2, 0x0f, 0x82); /* jb top */
+    e32(e, (uint32_t) (top - (e->p + 4)));
+    emit_seq(e, 2, 0x0f, 0x77); /* emms */
+    emit_seq(e, 2, 0x8b, 0x2d); /* mov ebp, [g_ldef] */
+    e32(e, (uint32_t) &g_ldef);
+    emit_seq(e, 2, 0x8b, 0x3d); /* mov edi, [g_lraw] */
+    e32(e, (uint32_t) &g_lraw);
+}
+
 static void
 emit_loop(struct emit *e, const struct variant *v)
 {
     const struct loop_def *d = &loop_defs[v->arg2];
     int                    shifts = d->kind == LK_SHIFT || d->kind == LK_SHD;
+
+    if (d->kind >= LK_MMX) {
+        emit_loop_mmx(e, d);
+        return;
+    }
 
     emit_seq(e, 2, 0x31, 0xed); /* xor ebp, ebp */
     emit_seq(e, 2, 0xc7, 0x05); /* mov dword [g_lraw], 0 */
@@ -245,6 +383,18 @@ group_loop(unsigned i)
 {
     const struct loop_def *d = &loop_defs[i];
     struct variant         v = { .group = d->name, .emit = emit_loop, .fx = FX_CUSTOM, .defmask = dm_exhaust, .arg2 = i };
+    if (d->kind >= LK_MMX && !(g_cpu.features & CPUID_MMX)) {
+        group_skip(d->name, "no MMX");
+        return;
+    }
+    if (d->kind >= LK_3DN && !(g_cpu.ext_features & EXT_3DNOW)) {
+        group_skip(d->name, "no 3DNow!");
+        return;
+    }
+    if (d->kind >= LK_3DNX && !(g_cpu.ext_features & EXT_3DNOWEXT)) {
+        group_skip(d->name, "no 3DNow! extensions");
+        return;
+    }
     group_begin(d->name);
     if (!g_counting)
         loop_fill(d);
@@ -267,4 +417,10 @@ GA(group_loop, 48), GA(group_loop, 49), GA(group_loop, 50), GA(group_loop, 51), 
 GA(group_loop, 54), GA(group_loop, 55), GA(group_loop, 56), GA(group_loop, 57), GA(group_loop, 58), GA(group_loop, 59), \
 GA(group_loop, 60), GA(group_loop, 61), GA(group_loop, 62), GA(group_loop, 63), GA(group_loop, 64), GA(group_loop, 65), \
 GA(group_loop, 66), GA(group_loop, 67), GA(group_loop, 68), GA(group_loop, 69), GA(group_loop, 70), GA(group_loop, 71), \
-GA(group_loop, 72), GA(group_loop, 73),
+GA(group_loop, 72), GA(group_loop, 73), GA(group_loop, 74), GA(group_loop, 75), GA(group_loop, 76), GA(group_loop, 77), \
+GA(group_loop, 78), GA(group_loop, 79), GA(group_loop, 80), GA(group_loop, 81), GA(group_loop, 82), GA(group_loop, 83), \
+GA(group_loop, 84), GA(group_loop, 85), GA(group_loop, 86), GA(group_loop, 87), GA(group_loop, 88), GA(group_loop, 89), \
+GA(group_loop, 90), GA(group_loop, 91), GA(group_loop, 92), GA(group_loop, 93), GA(group_loop, 94), GA(group_loop, 95), \
+GA(group_loop, 96), GA(group_loop, 97), GA(group_loop, 98), GA(group_loop, 99), GA(group_loop, 100), GA(group_loop, 101), \
+GA(group_loop, 102), GA(group_loop, 103), GA(group_loop, 104), GA(group_loop, 105), GA(group_loop, 106), GA(group_loop, 107), \
+GA(group_loop, 108), GA(group_loop, 109),
