@@ -158,6 +158,7 @@ between versions until the group itself changes.
 | 259 | `dr.data` | data breakpoints for writes and for reads/writes, 1, 2 and 4 bytes, hit, straddled and missed by a byte |
 | 260 | `dr.gd` | DR7.GD: the next MOV to or from a debug register faults with DR6.BD |
 | 261 | `dr.alias` | DR4/DR5 as DR6/DR7 with CR4.DE clear, #UD with it set |
+| 262 | `dr.io` | I/O breakpoints (CR4.DE, RW=10) on port 80h by OUT imm8, OUT DX and OUTSB; another port; RW=10 without DE (raw) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
