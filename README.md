@@ -131,6 +131,7 @@ between versions until the group itself changes.
 | 232 | `r1.outer` | IRETD and RETF from ring 1 to rings 2 and 3: DS and ES of DPL 1 loaded null; IRETD within ring 1 keeps them |
 | 233 | `r1.stack` | the stack switch into ring 1 through gates from rings 2 and 3 (SS1:ESP1 from the TSS), none from ring 1 |
 | 234 | `r1.lar` | LAR, LSL and VERR of every descriptor at CPL 1, RPL 0 and 3 (raw) |
+| 235 | `r2.basic` | code and I/O checks at CPL 2 |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
