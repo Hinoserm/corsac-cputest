@@ -531,6 +531,7 @@ static const struct group_def groups[] = {
     G(group_idt_limit),
     G(group_code16_limit),
     G(group_code16_opsize),
+    G(group_sgdt_forms),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

@@ -616,3 +616,67 @@ group_code16_opsize(void)
     }
     group_end(name);
 }
+
+/* ---- SGDT and friends --------------------------------------------------------------------- */
+
+/* SGDT and SIDT with 32- and 16-bit operand size: the limit stays in
+   memory, the base is read back into ESI and cleared there (it is where
+   this build put the table), and made relative to the real one; the byte
+   after the six is the buffer's own. SLDT and STR to a 32-bit register
+   (the upper half), a 16-bit one, and memory. */
+static void
+canon_sgdt(const struct variant *v, const struct kin *in, struct kout *o)
+{
+#ifndef HOSTTEST
+    struct {
+        uint16_t limit;
+        uint32_t base;
+    } __attribute__((packed)) t;
+    if (v->arg2)
+        __asm__ volatile("sidt %0" : "=m"(t));
+    else
+        __asm__ volatile("sgdt %0" : "=m"(t));
+    o->esi -= t.base;
+#endif
+}
+
+static void
+fix_sgdt(const struct variant *v)
+{
+#ifdef HOSTTEST
+    g_skip = 1; /* UMIP, and a table of Linux's */
+#endif
+    fix_mem_ebx(v);
+}
+
+static void
+group_sgdt_forms(void)
+{
+    static const struct {
+        uint8_t len, b[16];
+    } seqs[] = {
+        { SEQ(0x0f, 0x01, 0x03, 0x8b, 0x73, 0x02, 0xc7, 0x43, 0x02, 0, 0, 0, 0) },       /* sgdt */
+        { SEQ(0x66, 0x0f, 0x01, 0x03, 0x8b, 0x73, 0x02, 0xc7, 0x43, 0x02, 0, 0, 0, 0) }, /* o16 sgdt */
+        { SEQ(0x0f, 0x01, 0x0b, 0x8b, 0x73, 0x02, 0xc7, 0x43, 0x02, 0, 0, 0, 0) },       /* sidt */
+        { SEQ(0x66, 0x0f, 0x01, 0x0b, 0x8b, 0x73, 0x02, 0xc7, 0x43, 0x02, 0, 0, 0, 0) }, /* o16 sidt */
+        { SEQ(0x0f, 0x00, 0xc1) },       /* sldt ecx */
+        { SEQ(0x66, 0x0f, 0x00, 0xc1) }, /* sldt cx */
+        { SEQ(0x0f, 0x00, 0x03) },       /* sldt [ebx] */
+        { SEQ(0x0f, 0x00, 0xc9) },       /* str ecx */
+        { SEQ(0x66, 0x0f, 0x00, 0xc9) }, /* str cx */
+        { SEQ(0x0f, 0x00, 0x0b) },       /* str [ebx] */
+    };
+    const char    *name = "sgdt.forms";
+    struct variant v    = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg,
+                            .fix_input = fix_sgdt, .arg = MEM_OFF };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.canon      = i < 4 ? canon_sgdt : 0;
+        v.arg2       = i >= 2 && i < 4;
+        v.fx_arg     = i != 4 && i != 7; /* a 32-bit register's upper half is the model's own */
+        run_plain(&v, 1);
+    }
+    group_end(name);
+}
