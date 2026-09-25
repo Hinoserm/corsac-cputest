@@ -98,16 +98,16 @@ group_smc(void)
        without a jump after the store, a 486 may still run the bytes it
        prefetched. */
     static const struct {
-        uint8_t len, defined;
+        uint8_t defined, len;
         uint8_t b[3];
     } kinds[] = {
-        { 3, 1, { 0x88, 0xeb, 0xb0 } },
-        { 2, 0, { 0x88, 0xb0 } },
-        { 3, 0, { 0x88, 0x90, 0xb0 } },
-        { 3, 1, { 0x89, 0xeb, 0xbe } },
-        { 3, 1, { 0xc6, 0xeb, 0x40 } },
-        { 3, 1, { 0x88, 0xeb, 0x83 } },
-        { 2, 0, { 0x88, 0x83 } },
+        { 1, SEQ(0x88, 0xeb, 0xb0) },
+        { 0, SEQ(0x88, 0xb0) },
+        { 0, SEQ(0x88, 0x90, 0xb0) },
+        { 1, SEQ(0x89, 0xeb, 0xbe) },
+        { 1, SEQ(0xc6, 0xeb, 0x40) },
+        { 1, SEQ(0x88, 0xeb, 0x83) },
+        { 0, SEQ(0x88, 0x83) },
     };
     const char    *name = "smc";
     struct variant v    = { .group = name, .emit = emit_smc, .fx = FX_CUSTOM, .defmask = dm_arg3 };
@@ -117,7 +117,7 @@ group_smc(void)
         v.target_len = kinds[k].len;
         v.arg2       = k;
         v.arg3       = kinds[k].defined;
-        run_ctx(&v, ctx_some, 3, 4);
+        run_plain(&v, 2);
     }
     group_end(name);
 }
@@ -174,35 +174,35 @@ static void
 group_segments(void)
 {
     static const struct {
-        uint8_t len, far, mask;
+        uint8_t far, mask, len;
         uint8_t b[16];
     } seqs[] = {
         /* mov fs, ax; mov esi, fs; mov edi, fs:[ebx]; push 10h; pop fs */
-        { 11, 0, 1, { 0x8e, 0xe0, 0x8c, 0xe6, 0x64, 0x8b, 0x3b, 0x6a, 0x10, 0x0f, 0xa1 } },
+        { 0, 1, SEQ(0x8e, 0xe0, 0x8c, 0xe6, 0x64, 0x8b, 0x3b, 0x6a, 0x10, 0x0f, 0xa1) },
         /* mov gs, ax; mov esi, gs; mov di, gs:[ebx+2]; push 10h; pop gs */
-        { 13, 0, 1, { 0x8e, 0xe8, 0x8c, 0xee, 0x66, 0x65, 0x8b, 0x7b, 0x02, 0x6a, 0x10, 0x0f, 0xa9 } },
+        { 0, 1, SEQ(0x8e, 0xe8, 0x8c, 0xee, 0x66, 0x65, 0x8b, 0x7b, 0x02, 0x6a, 0x10, 0x0f, 0xa9) },
         /* lfs esi, [ebx]; mov edi, fs; push 10h; pop fs */
-        { 9, 1, 2, { 0x0f, 0xb4, 0x33, 0x8c, 0xe7, 0x6a, 0x10, 0x0f, 0xa1 } },
+        { 1, 2, SEQ(0x0f, 0xb4, 0x33, 0x8c, 0xe7, 0x6a, 0x10, 0x0f, 0xa1) },
         /* lfs si, [ebx] (m16:16); mov edi, fs; push 10h; pop fs */
-        { 10, 2, 2, { 0x66, 0x0f, 0xb4, 0x33, 0x8c, 0xe7, 0x6a, 0x10, 0x0f, 0xa1 } },
+        { 2, 2, SEQ(0x66, 0x0f, 0xb4, 0x33, 0x8c, 0xe7, 0x6a, 0x10, 0x0f, 0xa1) },
         /* lgs esi, [ebx]; mov edi, gs:[ebx]; push 10h; pop gs */
-        { 10, 1, 0, { 0x0f, 0xb5, 0x33, 0x65, 0x8b, 0x3b, 0x6a, 0x10, 0x0f, 0xa9 } },
+        { 1, 0, SEQ(0x0f, 0xb5, 0x33, 0x65, 0x8b, 0x3b, 0x6a, 0x10, 0x0f, 0xa9) },
         /* mov ax, ds (the 16-bit form keeps EAX's upper half) */
-        { 3, 0, 0, { 0x66, 0x8c, 0xd8 } },
+        { 0, 0, SEQ(0x66, 0x8c, 0xd8) },
         /* mov eax, ss */
-        { 2, 0, 4, { 0x8c, 0xd0 } },
+        { 0, 4, SEQ(0x8c, 0xd0) },
         /* mov [ebx], cs: always 16 bits to memory */
-        { 2, 0, 0, { 0x8c, 0x0b } },
+        { 0, 0, SEQ(0x8c, 0x0b) },
         /* lar eax, ecx */
-        { 3, 0, 8 | 16, { 0x0f, 0x02, 0xc1 } },
+        { 0, 8 | 16, SEQ(0x0f, 0x02, 0xc1) },
         /* lar ax, cx */
-        { 4, 0, 16, { 0x66, 0x0f, 0x02, 0xc1 } },
+        { 0, 16, SEQ(0x66, 0x0f, 0x02, 0xc1) },
         /* lsl edx, ecx */
-        { 3, 0, 16, { 0x0f, 0x03, 0xd1 } },
+        { 0, 16, SEQ(0x0f, 0x03, 0xd1) },
         /* verr cx */
-        { 3, 0, 16, { 0x0f, 0x00, 0xe1 } },
+        { 0, 16, SEQ(0x0f, 0x00, 0xe1) },
         /* verw cx */
-        { 3, 0, 16, { 0x0f, 0x00, 0xe9 } },
+        { 0, 16, SEQ(0x0f, 0x00, 0xe9) },
     };
     const char    *name = "segments";
     struct variant v    = { .group = name, .fx = FX_CUSTOM, .defmask = dm_seg, .fix_input = fix_seg,
@@ -216,8 +216,8 @@ group_segments(void)
             v.arg2       = seqs[i].far;
             v.arg3       = s;
             /* Only the far-pointer and store forms write the buffer. */
-            v.reg_fix = !seqs[i].far && seqs[i].b[1] != 0x8c;
-            run_ctx(&v, ctx_keep, 3, 2);
+            v.reg_fix = !seqs[i].far && !(seqs[i].b[0] == 0x8c && seqs[i].b[1] < 0xc0);
+            run_keep(&v, 1);
             seg_restore();
         }
     }

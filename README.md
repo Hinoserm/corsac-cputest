@@ -49,8 +49,8 @@ landing in the harness.
 
 ## Groups
 
-The first six were recorded first; their order and contents never change,
-so their CRCs stay comparable across versions. New groups only go at the end.
+New groups only go at the end, so each group's CRCs stay comparable
+between versions until the group itself changes.
 
 | # | group          | what                                                            |
 |---|----------------|-----------------------------------------------------------------|
@@ -96,6 +96,32 @@ and an Athlon, so they're in `crc_raw` only.
 The test never uses LOCK CMPXCHG8B with a register operand. That's the
 Pentium F00F erratum, and it would hang the machine.
 
+## How much it runs
+
+This is an accuracy test, not a stress test: each case runs as few times as
+it takes.
+
+- **Known edge cases first, once each.** Where an instruction's edges are
+  known, the first inputs of a variant are exactly those, in order: shift
+  counts 0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33; divisor 0, 1 and the
+  quotient one too big; the most negative dividend over -1 and its
+  neighbours; CMPXCHG equal and not; REP with ECX 0, 1 and 5 in both
+  directions; BSF/BSR of 0, bit 0 and the top bit; BOUND below, on, inside
+  and above. Then one or two random inputs for what nobody listed.
+- **Random where no edges are known**, biased toward edge values (0, 1,
+  7F/80, FF, 7FFF/8000, ...), as for the ALU's own flag math at 16 and 32
+  bits and MMX saturation.
+- **Exhaustive where the input space is small**: the 8-bit flag math is
+  walked completely by loops inside the test (see `exhaust8`).
+- **A few representative registers**, not every pair: different registers,
+  the same register twice, a high byte, memory.
+- **Every flag producer, with and without a block boundary, only for
+  instructions that read the flags** (SETcc, CMOVcc, ADC/SBB, RCL/RCR,
+  PUSHF, the BCD adjusts, SALC, CMC, LAHF, INTO). The rest run once plain
+  and once after an ADD across a block boundary.
+- **Four runs** per test: two interpreted, two compiled. The second
+  compiled run is where anything the first one left behind shows up.
+
 ## Output
 
 ```
@@ -118,21 +144,8 @@ on which groups ran before it.
 
 ## Reference values
 
-`crc_defined` from a Zen 5 host running the ELF build. Upstream 86Box
-master, emulating a Pentium MMX, gives the same values for every group but
-`bt`. On an earlier version of this test, a real Pentium MMX matched the host
-in every group.
-
-| group       | crc_defined |
-|-------------|-------------|
-| alu.rr      | 8237e275    |
-| setcc       | e82d1a9c    |
-| lahf.sahf   | a4ccdc5b    |
-| bswap       | e5c92df6    |
-| movzx.movsx | 28f49335    |
-| bt          | 78164abb    |
-
-Groups 7 on have no reference values yet.
+Every CRC changed in CPUTEST 3 (see *How much it runs*). References for it
+will come from real CPUs; the values for CPUTEST 1 and 2 no longer apply.
 
 Three interpreter bugs in 86Box turned up this way, all in upstream master:
 

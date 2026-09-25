@@ -31,14 +31,18 @@ set_mm(int r, uint32_t lo, uint32_t hi)
     }
 }
 
-/* Shift counts from an MMX register or memory: mostly in or near range,
-   sometimes with the upper half set (which shifts everything out). */
+/* Shift counts from an MMX register or memory: every edge for words,
+   dwords and the qword in turn, then one with the upper half set (which
+   shifts everything out), then one random. */
+static const uint32_t mm_counts[] = { 0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255 };
+#define N_MM_COUNTS (sizeof(mm_counts) / sizeof(mm_counts[0]))
+
 static void
 fix_mm_count(const struct variant *v)
 {
-    static const uint32_t counts[] = { 0, 1, 2, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255 };
-    uint32_t              lo       = (rnd() & 1) ? counts[rnd() % (sizeof(counts) / sizeof(counts[0]))] : rnd() & 0x3f;
-    uint32_t              hi       = (rnd() & 7) ? 0 : rnd_operand();
+    int      e  = edge(N_MM_COUNTS + 1);
+    uint32_t lo = e >= 0 && e < (int) N_MM_COUNTS ? mm_counts[e] : rnd() & 0x3f;
+    uint32_t hi = e == (int) N_MM_COUNTS ? 1 + (rnd() & 0xff) : 0;
     if (v->arg2 == RM_MEM)
         g_in.ebx = (uint32_t) g_buf + MEM_OFF;
     set_mm(v->arg2, lo, hi);
@@ -60,7 +64,7 @@ group_mmx(void)
     /* Shifts by an MMX register or memory. */
     static const uint8_t shifts[] = { 0xd1, 0xd2, 0xd3, 0xe1, 0xe2, 0xf1, 0xf2, 0xf3 };
     /* (destination, source) pairs; 3,3 is the same register twice. */
-    static const uint8_t pairs[4][2] = { { 0, 1 }, { 3, 3 }, { 7, 2 }, { 5, RM_MEM } };
+    static const uint8_t pairs[3][2] = { { 0, 1 }, { 3, 3 }, { 5, RM_MEM } };
     const char          *name        = "mmx";
     struct variant       v           = { .group = name, .mmx = 1 };
 
@@ -70,17 +74,17 @@ group_mmx(void)
     }
     group_begin(name);
     for (unsigned o = 0; o < sizeof(ops); o++) {
-        for (int p = 0; p < 4; p++) {
+        for (int p = 0; p < 3; p++) {
             v.target[0]  = 0x0f;
             v.target[1]  = ops[o];
             v.target_len = put_mm_modrm(v.target, 2, pairs[p][0], pairs[p][1]);
             v.fix_input  = pairs[p][1] == RM_MEM ? fix_mem_ebx : 0;
             v.arg        = MEM_OFF;
-            run_two(&v, 4);
+            run_plain(&v, 2);
         }
     }
     for (unsigned o = 0; o < sizeof(shifts); o++) {
-        for (int p = 0; p < 4; p++) {
+        for (int p = 0; p < 3; p += 2) { /* a register, memory */
             v.target[0]  = 0x0f;
             v.target[1]  = shifts[o];
             v.target_len = put_mm_modrm(v.target, 2, pairs[p][0], pairs[p][1]);
@@ -88,7 +92,7 @@ group_mmx(void)
             v.arg2       = pairs[p][1];
             v.reg_fix    = pairs[p][1] != RM_MEM;
             v.norm       = pairs[p][1] == RM_MEM ? 1 << R_EBX : 0;
-            run_two(&v, 6);
+            run_plain(&v, N_MM_COUNTS + 2);
         }
     }
     v.reg_fix = 0;
@@ -110,7 +114,7 @@ group_mmx(void)
                     v.target_len = 4;
                     v.fix_input  = 0;
                     v.faults_ok  = !valid;
-                    run_two(&v, 1);
+                    run_plain(&v, 1);
                 }
             }
         }
@@ -119,29 +123,29 @@ group_mmx(void)
 
     /* MOVD and MOVQ, both directions, registers and memory (one misaligned). */
     static const struct {
-        uint8_t len, mem;
+        uint8_t mem, len;
         uint8_t b[5];
     } moves[] = {
-        { 3, 0, { 0x0f, 0x6e, 0xc0 } },       /* movd mm0, eax */
-        { 3, 0, { 0x0f, 0x6e, 0xe6 } },       /* movd mm4, esi */
-        { 3, 0, { 0x0f, 0x6e, 0xcd } },       /* movd mm1, ebp */
-        { 3, 1, { 0x0f, 0x6e, 0x13 } },       /* movd mm2, [ebx] */
-        { 3, 0, { 0x0f, 0x7e, 0xc8 } },       /* movd eax, mm1 */
-        { 3, 0, { 0x0f, 0x7e, 0xff } },       /* movd edi, mm7 */
-        { 3, 1, { 0x0f, 0x7e, 0x1b } },       /* movd [ebx], mm3 */
-        { 3, 0, { 0x0f, 0x6f, 0xea } },       /* movq mm5, mm2 */
-        { 3, 1, { 0x0f, 0x6f, 0x33 } },       /* movq mm6, [ebx] */
-        { 4, 1, { 0x0f, 0x6f, 0x4b, 0x1f } }, /* movq mm1, [ebx+31] */
-        { 3, 0, { 0x0f, 0x7f, 0xd5 } },       /* movq mm5, mm2 (store form) */
-        { 3, 1, { 0x0f, 0x7f, 0x1b } },       /* movq [ebx], mm3 */
-        { 4, 1, { 0x0f, 0x7f, 0x63, 0x1f } }, /* movq [ebx+31], mm4 */
+        { 0, SEQ(0x0f, 0x6e, 0xc0) },       /* movd mm0, eax */
+        { 0, SEQ(0x0f, 0x6e, 0xe6) },       /* movd mm4, esi */
+        { 0, SEQ(0x0f, 0x6e, 0xcd) },       /* movd mm1, ebp */
+        { 1, SEQ(0x0f, 0x6e, 0x13) },       /* movd mm2, [ebx] */
+        { 0, SEQ(0x0f, 0x7e, 0xc8) },       /* movd eax, mm1 */
+        { 0, SEQ(0x0f, 0x7e, 0xff) },       /* movd edi, mm7 */
+        { 1, SEQ(0x0f, 0x7e, 0x1b) },       /* movd [ebx], mm3 */
+        { 0, SEQ(0x0f, 0x6f, 0xea) },       /* movq mm5, mm2 */
+        { 1, SEQ(0x0f, 0x6f, 0x33) },       /* movq mm6, [ebx] */
+        { 1, SEQ(0x0f, 0x6f, 0x4b, 0x1f) }, /* movq mm1, [ebx+31] */
+        { 0, SEQ(0x0f, 0x7f, 0xd5) },       /* movq mm5, mm2 (store form) */
+        { 1, SEQ(0x0f, 0x7f, 0x1b) },       /* movq [ebx], mm3 */
+        { 1, SEQ(0x0f, 0x7f, 0x63, 0x1f) }, /* movq [ebx+31], mm4 */
     };
     for (unsigned i = 0; i < sizeof(moves) / sizeof(moves[0]); i++) {
         memcpy(v.target, moves[i].b, moves[i].len);
         v.target_len = moves[i].len;
         v.fix_input  = moves[i].mem ? fix_mem_ebx : 0;
         v.arg        = MEM_OFF;
-        run_ctx(&v, ctx_some, 3, 4);
+        run_plain(&v, 2);
     }
     group_end(name);
 }
@@ -183,16 +187,16 @@ static void
 group_mmx_x87(void)
 {
     static const struct {
-        uint8_t len, tw_defined;
+        uint8_t tw_defined, len;
         uint8_t b[6];
     } pre[] = {
         { 0, 0, { 0 } },                                /* straight after MMX */
-        { 2, 1, { 0x0f, 0x77 } },                       /* emms */
-        { 5, 0, { 0x0f, 0x77, 0x0f, 0x6f, 0xc1 } },     /* emms; movq mm0, mm1 */
-        { 5, 0, { 0x0f, 0x77, 0x0f, 0x7e, 0xc0 } },     /* emms; movd eax, mm0 */
-        { 4, 1, { 0x0f, 0x77, 0xd9, 0xe8 } },           /* emms; fld1 */
-        { 2, 0, { 0xd9, 0xe8 } },                       /* fld1 onto a full stack: masked #IS */
-        { 6, 1, { 0x0f, 0x77, 0xd9, 0xe8, 0xd9, 0xee } }, /* emms; fld1; fldz */
+        { 1, SEQ(0x0f, 0x77) },                       /* emms */
+        { 0, SEQ(0x0f, 0x77, 0x0f, 0x6f, 0xc1) },     /* emms; movq mm0, mm1 */
+        { 0, SEQ(0x0f, 0x77, 0x0f, 0x7e, 0xc0) },     /* emms; movd eax, mm0 */
+        { 1, SEQ(0x0f, 0x77, 0xd9, 0xe8) },           /* emms; fld1 */
+        { 0, SEQ(0xd9, 0xe8) },                       /* fld1 onto a full stack: masked #IS */
+        { 1, SEQ(0x0f, 0x77, 0xd9, 0xe8, 0xd9, 0xee) }, /* emms; fld1; fldz */
     };
     const char    *name = "mmx.x87";
     struct variant v    = { .group = name, .mmx = 1, .fx = FX_CUSTOM, .defmask = dm_fenv };
@@ -206,7 +210,7 @@ group_mmx_x87(void)
         memcpy(v.target, pre[i].b, pre[i].len);
         v.target_len = put_fenv(v.target, pre[i].len);
         v.arg2       = pre[i].tw_defined;
-        run_ctx(&v, ctx_some, 3, 4);
+        run_plain(&v, 1);
     }
     group_end(name);
 }
@@ -280,7 +284,7 @@ group_3dnow(void)
         { 0x8e, 0, 1, 1 }, /* PFPNACC */
         { 0xbb, 1, 1, 0 }, /* PSWAPD */
     };
-    static const uint8_t pairs[3][2] = { { 0, 1 }, { 4, 4 }, { 7, RM_MEM } };
+    static const uint8_t pairs[2][2] = { { 0, 1 }, { 7, RM_MEM } };
     const char          *name        = "3dnow";
     struct variant       v           = { .group = name, .mmx = 1, .fx = FX_CUSTOM, .defmask = dm_3dnow };
 
@@ -292,7 +296,7 @@ group_3dnow(void)
     for (unsigned o = 0; o < sizeof(ops) / sizeof(ops[0]); o++) {
         if (ops[o].ext && !(g_cpu.ext_features & EXT_3DNOWEXT))
             continue;
-        for (int p = 0; p < 3; p++) {
+        for (int p = 0; p < 2; p++) {
             int n        = 0;
             v.target[n++] = 0x0f;
             v.target[n++] = 0x0f;
@@ -304,18 +308,18 @@ group_3dnow(void)
             v.fix_input   = ops[o].fl ? fix_float : pairs[p][1] == RM_MEM ? fix_rm : 0;
             v.reg_fix     = pairs[p][1] != RM_MEM;
             v.norm        = pairs[p][1] == RM_MEM ? 1 << R_EBX : 0;
-            run_two(&v, 4);
+            run_plain(&v, 2);
         }
     }
     /* FEMMS, and PREFETCH/PREFETCHW (no visible effect but must decode). */
     {
         static const struct {
-            uint8_t len, mem;
+            uint8_t mem, len;
             uint8_t b[3];
         } seqs[] = {
-            { 2, 0, { 0x0f, 0x0e } },       /* femms */
-            { 3, 1, { 0x0f, 0x0d, 0x03 } }, /* prefetch [ebx] */
-            { 3, 1, { 0x0f, 0x0d, 0x0b } }, /* prefetchw [ebx] */
+            { 0, SEQ(0x0f, 0x0e) },       /* femms */
+            { 1, SEQ(0x0f, 0x0d, 0x03) }, /* prefetch [ebx] */
+            { 1, SEQ(0x0f, 0x0d, 0x0b) }, /* prefetchw [ebx] */
         };
         v.arg3 = 1;
         for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
@@ -328,7 +332,7 @@ group_3dnow(void)
             v.arg        = MEM_OFF;
             v.reg_fix    = 0;
             v.norm       = 0;
-            run_ctx(&v, ctx_some, 3, 4);
+            run_plain(&v, 1);
         }
     }
     group_end(name);

@@ -1,43 +1,12 @@
 /*
- * Groups added after the first six: the instructions 86Box's recompiler
- * still hands to the interpreter, then the corners around them. Included
- * into groups.inc. The same rule holds: never reorder, only append.
+ * Groups 7-20: the instructions 86Box's recompiler still hands to the
+ * interpreter, then the corners around them. Included into groups.inc.
+ * The same rule holds: never reorder, only append.
  */
 
 /* An r/m operand that is memory: [ebx], EBX pointing 8 bytes into the buffer. */
 #define RM_MEM   8
 #define MEM_OFF  8
-
-/* Producers that leave ECX and EDX alone, for tests whose defined result
-   depends on an input the producer would otherwise change (a count in CL,
-   a source operand). none, cmp, test: unknown, SUB and ZN lazy states. */
-static const uint8_t ctx_keep[] = { 0, 1, 9 };
-/* none, add, sub. */
-static const uint8_t ctx_some[] = { 0, 3, 2 };
-
-static void
-run_ctx(struct variant *v, const uint8_t *set, int n, int inputs)
-{
-    for (int p = 0; p < n; p++) {
-        for (int b = 0; b < 2; b++) {
-            v->producer = set[p];
-            v->boundary = b;
-            run_inputs(v, inputs);
-        }
-    }
-}
-
-/* No producer, then ADD across a block boundary. */
-static void
-run_two(struct variant *v, int inputs)
-{
-    v->producer = 0;
-    v->boundary = 0;
-    run_inputs(v, inputs);
-    v->producer = 3;
-    v->boundary = 1;
-    run_inputs(v, inputs);
-}
 
 static uint32_t
 szmask(int size)
@@ -133,6 +102,10 @@ set_fix_rm(struct variant *v, int rm, void (*fix)(const struct variant *))
     v->norm      = rm == RM_MEM ? 1 << R_EBX : 0;
 }
 
+/* Representative operands (register, register or memory): different, the
+   same register twice, memory. */
+static const uint8_t opnd32[4][2] = { { R_EAX, R_ECX }, { R_EDX, R_EDX }, { R_ESI, RM_MEM }, { R_EDI, R_EBP } };
+
 /* ---- defined-result masks ------------------------------------------------ */
 
 /* Every arithmetic flag written, and defined. */
@@ -164,6 +137,21 @@ dm_div(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *
 
 /* ---- IMUL r, r/m and IMUL r, r/m, imm ------------------------------------- */
 
+/* Operands small (no overflow), then random ones (mostly overflowing).
+   arg: the size; arg2: the source; arg3: the destination for the
+   two-operand form, 0xff for the others. */
+static void
+fix_imul(const struct variant *v)
+{
+    int size = v->arg;
+    fix_rm(v);
+    if (edge(1) == 0) {
+        set_opnd(v->arg2, size, (uint32_t) ((int32_t) (rnd() % 200) - 100));
+        if (v->arg3 != 0xff)
+            set_opnd(v->arg3, size, (uint32_t) ((int32_t) (rnd() % 200) - 100));
+    }
+}
+
 static void
 group_imul(void)
 {
@@ -175,32 +163,29 @@ group_imul(void)
     for (int size = 16; size <= 32; size += 16) {
         for (int form = 0; form < 3; form++) { /* 0F AF, 6B ib, 69 iw/id */
             int nimm = form == 0 ? 1 : form == 1 ? 6 : 5;
-            for (int dst = 0; dst < 8; dst++) {
-                if (dst == R_ESP)
-                    continue;
-                for (int src = 0; src <= RM_MEM; src++) {
-                    if (src == R_ESP || (src == RM_MEM && dst == R_EBX))
-                        continue;
-                    for (int k = 0; k < nimm; k++) {
-                        int n = 0;
-                        if (size == 16)
-                            v.target[n++] = 0x66;
-                        if (form == 0) {
-                            v.target[n++] = 0x0f;
-                            v.target[n++] = 0xaf;
-                        } else
-                            v.target[n++] = form == 1 ? 0x6b : 0x69;
-                        n = put_modrm(v.target, n, dst, src);
-                        if (form == 1)
-                            v.target[n++] = imm8s[k];
-                        else if (form == 2) {
-                            put_le(v.target + n, imm32s[k], size / 8);
-                            n += size / 8;
-                        }
-                        v.target_len = n;
-                        set_fix_rm(&v, src, src == RM_MEM ? fix_rm : 0);
-                        run_two(&v, 2);
+            for (int p = 0; p < 4; p++) {
+                int dst = opnd32[p][0], src = opnd32[p][1];
+                for (int k = 0; k < nimm; k++) {
+                    int n = 0;
+                    if (size == 16)
+                        v.target[n++] = 0x66;
+                    if (form == 0) {
+                        v.target[n++] = 0x0f;
+                        v.target[n++] = 0xaf;
+                    } else
+                        v.target[n++] = form == 1 ? 0x6b : 0x69;
+                    n = put_modrm(v.target, n, dst, src);
+                    if (form == 1)
+                        v.target[n++] = imm8s[k];
+                    else if (form == 2) {
+                        put_le(v.target + n, imm32s[k], size / 8);
+                        n += size / 8;
                     }
+                    v.target_len = n;
+                    v.arg        = size;
+                    v.arg3       = form == 0 ? dst : 0xff;
+                    set_fix_rm(&v, src, fix_imul);
+                    run_keep(&v, 3);
                 }
             }
         }
@@ -210,54 +195,109 @@ group_imul(void)
 
 /* ---- MUL, IMUL, DIV, IDIV (F6/F7 /4-/7) ----------------------------------- */
 
-/* Mostly dividends that fit: the high half below the divisor (DIV) or the
-   sign extension of the low half (IDIV). A quarter as they come, which
-   mostly overflow into #DE, and some divisors of zero. */
+/* The dividend's high and low halves and the divisor, per size. */
+struct div_case {
+    uint32_t high, low, div;
+};
+
+/* The known edges, as (high, low, divisor) at each size, for DIV and IDIV
+   alike: the most negative dividend over -1 (#DE on every real CPU; some
+   emulators compute it in C and crash), its neighbours, the most negative
+   quotient that fits, divisors 0 and 1, and a quotient one too big. */
+static int
+div_edge(int size, int sgn, struct div_case *c)
+{
+    uint32_t m = szmask(size), top = 1u << (size - 1);
+    const struct div_case cases[] = {
+        { top, 0, m },          /* MIN / -1: #DE */
+        { top - 1, m, m },      /* 7FFF:FFFF / -1 */
+        { top, 1, m },          /* 8000:0001 / -1 */
+        { m, top, m },          /* -(2^(n-1)) / -1: quotient 2^(n-1), #DE */
+        { m, top, 1 },          /* -(2^(n-1)) / 1: fits exactly */
+        { m, top, 2 },          /* quotient -(2^(n-2)) */
+        { 0, top, 1 },          /* DIV: 2^(n-1) / 1 fits; IDIV: too big */
+        { 0, 12345 & m, 0 },    /* divisor 0 */
+        { 1, 0, 1 },            /* quotient 2^n: one too big */
+        { 0, m, m },            /* quotient 1 */
+    };
+    int e = edge(sizeof(cases) / sizeof(cases[0]));
+    (void) sgn;
+    if (e < 0)
+        return 0;
+    *c = cases[e];
+    return 1;
+}
+
+/* The edges above, then random dividends that fit (the high half below
+   the divisor, or the sign extension of the low half), then one as the
+   input came (mostly overflowing into #DE). Where the divisor is part of
+   the dividend (AL/AH, EAX/EDX) only the dividend is set. */
 static void
 fix_div(const struct variant *v)
 {
-    int      size = v->arg3 & 0xff, sgn = (v->arg3 >> 8) & 1, rm = v->arg2;
-    uint32_t mask = szmask(size);
+    int             size = v->arg3 & 0xff, sgn = (v->arg3 >> 8) & 1, rm = v->arg2;
+    uint32_t        mask = szmask(size);
+    struct div_case c;
+    int             alias = size == 8 ? (rm == 0 || rm == 4) : (rm == R_EAX || rm == R_EDX);
 
     fix_rm(v);
-    int mode = rnd() & 3;
-    if (mode == 0)
-        return;
-    /* The divisor is part of the dividend: leave it to chance. */
-    if (size == 8 ? (rm == 0 || rm == 4) : (rm == R_EAX || rm == R_EDX))
-        return;
-    uint32_t div = mode == 1 ? rnd_operand() & mask : rnd() & mask;
-    if (mode == 3)
-        div &= 0xff;
-    set_opnd(rm, size, div);
-    uint32_t low = get_opnd(R_EAX, size), high;
-    if (sgn)
-        high = (low >> (size - 1)) & 1 ? mask : 0;
-    else
-        high = div ? rnd() % div : rnd() & mask;
-    set_opnd(size == 8 ? 4 : R_EDX, size, high);
+    if (!div_edge(size, sgn, &c)) {
+        if (edge(12) < 0) /* the last input as it came */
+            return;
+        c.div  = (rnd() & 1) ? rnd_operand() & mask : rnd() & 0xff;
+        c.low  = rnd() & mask;
+        if (sgn)
+            c.high = (c.low >> (size - 1)) & 1 ? mask : 0;
+        else
+            c.high = c.div ? rnd() % c.div : rnd() & mask;
+    }
+    if (size == 8) {
+        g_in.eax = (g_in.eax & 0xffff0000u) | ((c.high & 0xff) << 8) | (c.low & 0xff);
+    } else {
+        set_opnd(R_EAX, size, c.low);
+        set_opnd(R_EDX, size, c.high);
+    }
+    if (!alias)
+        set_opnd(rm, size, c.div);
+}
+
+/* MUL and IMUL: zero, one, -1, the top bit, then random. */
+static void
+fix_mul(const struct variant *v)
+{
+    int      size = v->arg3 & 0xff;
+    uint32_t m = szmask(size), edges[] = { 0, 1, m, 1u << (size - 1), m >> 1 };
+    int      e = edge(5);
+    fix_rm(v);
+    if (e >= 0) { /* the accumulator one edge, the source another */
+        set_opnd(R_EAX, size, edges[(e + 2) % 5]);
+        set_opnd(v->arg2, size, edges[e]);
+    }
 }
 
 static void
 group_muldiv(void)
 {
-    const char    *name = "mul.div";
-    struct variant v    = { .group = name, .fx = FX_CUSTOM };
+    /* The source: the accumulator itself, another register, a high byte,
+       memory. */
+    static const uint8_t rms8[]  = { 0, 1, 4, 7, RM_MEM };             /* AL CL AH BH [m] */
+    static const uint8_t rms32[] = { R_EAX, R_ECX, R_EDX, R_ESI, RM_MEM };
+    const char          *name    = "mul.div";
+    struct variant       v       = { .group = name, .fx = FX_CUSTOM };
     group_begin(name);
     for (int size = 8; size <= 32; size *= 2) {
         for (int op = 4; op < 8; op++) {
-            for (int rm = 0; rm <= RM_MEM; rm++) {
-                if (size != 8 && rm == R_ESP)
-                    continue;
+            for (int r = 0; r < 5; r++) {
+                int rm       = size == 8 ? rms8[r] : rms32[r];
                 int n        = put_op(v.target, 0, size, 0xf6);
                 n            = put_modrm(v.target, n, op, rm);
                 v.target_len = n;
                 int div      = op >= 6;
-                set_fix_rm(&v, rm, div ? fix_div : rm == RM_MEM ? fix_rm : 0);
-                v.arg3      = size | ((op == 7) << 8);
+                set_fix_rm(&v, rm, div ? fix_div : fix_mul);
+                v.arg3      = size | ((op == 5 || op == 7) << 8);
                 v.defmask   = div ? dm_div : dm_mul;
                 v.faults_ok = div;
-                run_ctx(&v, ctx_some, 3, 6);
+                run_keep(&v, div ? 13 : 7);
             }
         }
     }
@@ -266,15 +306,19 @@ group_muldiv(void)
 
 /* ---- shifts and rotates: by CL, by 1, by an immediate --------------------- */
 
-static const uint8_t shift_counts[] = { 0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 18, 31, 32, 33, 63, 255 };
+/* The counts that matter for 8, 16 and 32 bits alike. */
+static const uint8_t shift_counts[] = { 0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33 };
+#define N_SHIFT_COUNTS (sizeof(shift_counts) / sizeof(shift_counts[0]))
 
-/* arg3: the count, or 0x100 for CL (then chosen here). */
+/* arg3: the count, or 0x100 for CL: then every count above in turn, and
+   one random. */
 static void
 fix_count(const struct variant *v)
 {
     fix_rm(v);
     if (v->arg3 & 0x100) {
-        uint32_t c = (rnd() & 1) ? shift_counts[rnd() % sizeof(shift_counts)] : rnd() & 0xff;
+        int      e = edge(N_SHIFT_COUNTS);
+        uint32_t c = e >= 0 ? shift_counts[e] : rnd() & 0xff;
         g_in.ecx   = (g_in.ecx & ~0xffu) | c;
     }
 }
@@ -313,35 +357,35 @@ dm_shift(const struct variant *v, const struct kin *in, struct kout *d, uint16_t
 static void
 group_shift(void)
 {
-    static const uint8_t rms[]  = { 0, 1, 3, 5, 7, RM_MEM }; /* AL CL BL CH BH / EAX ECX EBX EBP EDI */
-    static const uint8_t imms[] = { 0, 1, 2, 7, 8, 9, 16, 17, 31, 32, 33 };
-    const char          *name   = "shift.rotate";
-    struct variant       v      = { .group = name, .fx = FX_CUSTOM, .defmask = dm_shift };
+    static const uint8_t rms[] = { 0, 1, RM_MEM }; /* AL/EAX, CL/ECX (the count register), memory */
+    const char          *name  = "shift.rotate";
+    struct variant       v     = { .group = name, .fx = FX_CUSTOM, .defmask = dm_shift };
     group_begin(name);
     for (int form = 0; form < 3; form++) { /* D2/D3 by CL, D0/D1 by 1, C0/C1 imm */
         for (int size = 8; size <= 32; size *= 2) {
             for (int op = 0; op < 8; op++) {
                 for (unsigned r = 0; r < sizeof(rms); r++) {
-                    int nimm = form == 2 ? (int) sizeof(imms) : 1;
+                    /* By an immediate: the register form, and memory at 32 bits. */
+                    if (form == 2 && (rms[r] == 1 || (rms[r] == RM_MEM && size != 32)))
+                        continue;
+                    int nimm = form == 2 ? (int) N_SHIFT_COUNTS : 1;
                     for (int k = 0; k < nimm; k++) {
                         static const uint8_t base[3] = { 0xd2, 0xd0, 0xc0 };
                         int                  n       = put_op(v.target, 0, size, base[form]);
                         n                            = put_modrm(v.target, n, op, rms[r]);
                         if (form == 2)
-                            v.target[n++] = imms[k];
+                            v.target[n++] = shift_counts[k];
                         v.target_len = n;
                         v.fx_arg     = op;
                         v.arg        = size;
-                        v.arg3       = form == 0 ? 0x100 : form == 1 ? 1 : imms[k];
+                        v.arg3       = form == 0 ? 0x100 : form == 1 ? 1 : shift_counts[k];
                         set_fix_rm(&v, rms[r], fix_count);
                         if (form == 0)
-                            run_ctx(&v, ctx_keep, 3, 4);
-                        else if (form == 1 && (op == 2 || op == 3))
-                            run_all_contexts(&v, 1); /* RCL, RCR read CF from every producer */
-                        else if (form == 1)
-                            run_ctx(&v, ctx_some, 3, 2);
+                            run_keep(&v, N_SHIFT_COUNTS + 1);
+                        else if (op == 2 || op == 3)
+                            run_flags(&v, 1); /* RCL, RCR read CF */
                         else
-                            run_two(&v, 1);
+                            run_plain(&v, 1);
                     }
                 }
             }
@@ -370,37 +414,33 @@ dm_shd(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *
 static void
 group_shd(void)
 {
-    static const uint8_t ops[4]  = { 0xa4, 0xa5, 0xac, 0xad }; /* SHLD imm, SHLD CL, SHRD imm, SHRD CL */
-    static const uint8_t dsts[]  = { R_EAX, R_ECX, R_EBX, R_ESI, RM_MEM };
-    static const uint8_t srcs[]  = { R_EDX, R_EDI, R_ECX };
-    static const uint8_t imms[]  = { 0, 1, 4, 8, 15, 16, 17, 24, 31, 32, 33 };
-    const char          *name    = "shld.shrd";
-    struct variant       v       = { .group = name, .fx = FX_CUSTOM, .defmask = dm_shd };
+    static const uint8_t ops[4]      = { 0xa4, 0xa5, 0xac, 0xad }; /* SHLD imm, SHLD CL, SHRD imm, SHRD CL */
+    static const uint8_t pairs[3][2] = { { R_EAX, R_EDX }, { RM_MEM, R_EDI }, { R_ESI, R_ESI } }; /* dst, src */
+    const char          *name        = "shld.shrd";
+    struct variant       v           = { .group = name, .fx = FX_CUSTOM, .defmask = dm_shd };
     group_begin(name);
     for (int o = 0; o < 4; o++) {
         int by_cl = ops[o] & 1;
         for (int size = 16; size <= 32; size += 16) {
-            for (unsigned d = 0; d < sizeof(dsts); d++) {
-                for (unsigned s = 0; s < sizeof(srcs); s++) {
-                    int nimm = by_cl ? 1 : (int) sizeof(imms);
-                    for (int k = 0; k < nimm; k++) {
-                        int n = 0;
-                        if (size == 16)
-                            v.target[n++] = 0x66;
-                        v.target[n++] = 0x0f;
-                        v.target[n++] = ops[o];
-                        n             = put_modrm(v.target, n, srcs[s], dsts[d]);
-                        if (!by_cl)
-                            v.target[n++] = imms[k];
-                        v.target_len = n;
-                        v.arg        = size;
-                        v.arg3       = by_cl ? 0x100 : imms[k];
-                        set_fix_rm(&v, dsts[d], fix_count);
-                        if (by_cl)
-                            run_ctx(&v, ctx_keep, 3, 4);
-                        else
-                            run_two(&v, 1);
-                    }
+            for (int p = 0; p < 3; p++) {
+                int nimm = by_cl ? 1 : (int) N_SHIFT_COUNTS;
+                for (int k = 0; k < nimm; k++) {
+                    int n = 0;
+                    if (size == 16)
+                        v.target[n++] = 0x66;
+                    v.target[n++] = 0x0f;
+                    v.target[n++] = ops[o];
+                    n             = put_modrm(v.target, n, pairs[p][1], pairs[p][0]);
+                    if (!by_cl)
+                        v.target[n++] = shift_counts[k];
+                    v.target_len = n;
+                    v.arg        = size;
+                    v.arg3       = by_cl ? 0x100 : shift_counts[k];
+                    set_fix_rm(&v, pairs[p][0], fix_count);
+                    if (by_cl)
+                        run_keep(&v, N_SHIFT_COUNTS + 1);
+                    else
+                        run_plain(&v, 1);
                 }
             }
         }
@@ -410,18 +450,19 @@ group_shd(void)
 
 /* ---- BSF, BSR ------------------------------------------------------------- */
 
-/* The source: zero a quarter of the time, a single bit a quarter. */
+/* The source: zero, bit 0, the top bit, one random bit, then random. */
 static void
 fix_bs(const struct variant *v)
 {
     int      size = v->arg;
     uint32_t val;
     fix_rm(v);
-    switch (rnd() & 3) {
+    switch (edge(4)) {
         case 0: val = 0; break;
-        case 1: val = 1u << (rnd() % size); break;
-        case 2: val = rnd(); break;
-        default: val = rnd_operand(); break;
+        case 1: val = 1; break;
+        case 2: val = 1u << (size - 1); break;
+        case 3: val = 1u << (rnd() % size); break;
+        default: val = rnd(); break;
     }
     set_opnd(v->arg2, size, val);
 }
@@ -444,29 +485,24 @@ dm_bs(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *u
 static void
 group_bs(void)
 {
-    const char    *name = "bsf.bsr";
-    struct variant v    = { .group = name, .fx = FX_CUSTOM, .defmask = dm_bs };
+    static const uint8_t pairs[3][2] = { { R_EAX, R_ECX }, { R_EDX, R_EDX }, { R_ESI, RM_MEM } }; /* dst, src */
+    const char          *name        = "bsf.bsr";
+    struct variant       v           = { .group = name, .fx = FX_CUSTOM, .defmask = dm_bs };
     group_begin(name);
     for (int op = 0xbc; op <= 0xbd; op++) {
         for (int size = 16; size <= 32; size += 16) {
-            for (int dst = 0; dst < 8; dst++) {
-                if (dst == R_ESP)
-                    continue;
-                for (int src = 0; src <= RM_MEM; src++) {
-                    if (src == R_ESP || (src == RM_MEM && dst == R_EBX))
-                        continue;
-                    int n = 0;
-                    if (size == 16)
-                        v.target[n++] = 0x66;
-                    v.target[n++] = 0x0f;
-                    v.target[n++] = op;
-                    n             = put_modrm(v.target, n, dst, src);
-                    v.target_len  = n;
-                    v.arg         = size;
-                    v.arg3        = dst;
-                    set_fix_rm(&v, src, fix_bs);
-                    run_ctx(&v, ctx_keep, 3, 3);
-                }
+            for (int p = 0; p < 3; p++) {
+                int n = 0;
+                if (size == 16)
+                    v.target[n++] = 0x66;
+                v.target[n++] = 0x0f;
+                v.target[n++] = op;
+                n             = put_modrm(v.target, n, pairs[p][0], pairs[p][1]);
+                v.target_len  = n;
+                v.arg         = size;
+                v.arg3        = pairs[p][0];
+                set_fix_rm(&v, pairs[p][1], fix_bs);
+                run_keep(&v, 6);
             }
         }
     }
@@ -475,23 +511,29 @@ group_bs(void)
 
 /* ---- CMPXCHG, XADD, CMPXCHG8B --------------------------------------------- */
 
-/* Half the time the accumulator equals the destination, so CMPXCHG
-   stores. */
+/* Equal, then not equal, then random: the accumulator against the
+   destination. */
 static void
 fix_cx(const struct variant *v)
 {
     fix_rm(v);
-    if (rnd() & 1)
-        set_opnd(R_EAX, v->arg, get_opnd(v->arg2, v->arg));
+    uint32_t dst = get_opnd(v->arg2, v->arg);
+    switch (edge(2)) {
+        case 0: set_opnd(R_EAX, v->arg, dst); break;
+        case 1: set_opnd(R_EAX, v->arg, dst ^ 1); break;
+        default: break;
+    }
 }
 
-/* [esi], ESI 8 bytes into the buffer; half the time EDX:EAX matches. */
+/* [esi], ESI 8 bytes into the buffer; EDX:EAX equal, then not, then
+   random. */
 static void
 fix_cx8(const struct variant *v)
 {
     g_in.esi = (uint32_t) g_buf + MEM_OFF;
-    if (rnd() & 1) {
-        g_in.eax = le32(g_in.buf + MEM_OFF);
+    int e    = edge(2);
+    if (e >= 0) {
+        g_in.eax = le32(g_in.buf + MEM_OFF) ^ e;
         g_in.edx = le32(g_in.buf + MEM_OFF + 4);
     }
 }
@@ -508,10 +550,12 @@ dm_cx8(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *
 static void
 group_cmpxchg(void)
 {
-    static const uint8_t srcs8[]  = { 0, 2, 5, 7 }; /* AL DL CH BH */
-    static const uint8_t srcs32[] = { R_EAX, R_EDX, R_ESI, R_EDI };
-    const char          *name     = "cmpxchg.xadd";
-    struct variant       v        = { .group = name, .fx = FX_CUSTOM, .defmask = dm_alldef };
+    /* (destination, source); a destination past RM_MEM is locked memory.
+       The first has the accumulator as the destination. */
+    static const uint8_t pairs8[5][2]  = { { 0, 2 }, { 1, 2 }, { 7, 5 }, { RM_MEM, 2 }, { RM_MEM + 1, 2 } };
+    static const uint8_t pairs32[5][2] = { { R_EAX, R_EDX }, { R_ECX, R_EDX }, { R_ESI, R_EDI }, { RM_MEM, R_EDX }, { RM_MEM + 1, R_EDX } };
+    const char          *name          = "cmpxchg.xadd";
+    struct variant       v             = { .group = name, .fx = FX_CUSTOM, .defmask = dm_alldef };
     if (!g_cpu.is486) {
         group_skip(name, "386");
         return;
@@ -520,27 +564,21 @@ group_cmpxchg(void)
     for (int op = 0; op < 2; op++) { /* CMPXCHG 0F B0/B1, XADD 0F C0/C1 */
         uint8_t op8 = op ? 0xc0 : 0xb0;
         for (int size = 8; size <= 32; size *= 2) {
-            /* dst 0-7, RM_MEM, and RM_MEM + 1 for a locked memory form */
-            for (int dst = 0; dst <= RM_MEM + 1; dst++) {
-                if (size != 8 && dst == R_ESP)
-                    continue;
-                for (int s = 0; s < 4; s++) {
-                    int src  = size == 8 ? srcs8[s] : srcs32[s];
-                    int rm   = dst > RM_MEM ? RM_MEM : dst;
-                    int n    = 0;
-                    if (dst > RM_MEM)
-                        v.target[n++] = 0xf0;
-                    if (size == 16)
-                        v.target[n++] = 0x66;
-                    v.target[n++] = 0x0f;
-                    v.target[n++] = size == 8 ? op8 : op8 | 1;
-                    n             = put_modrm(v.target, n, src, rm);
-                    v.target_len  = n;
-                    v.arg         = size;
-                    v.faults_ok   = 0;
-                    set_fix_rm(&v, rm, fix_cx);
-                    run_ctx(&v, ctx_some, 3, 4);
-                }
+            for (int p = 0; p < 5; p++) {
+                const uint8_t *pr  = size == 8 ? pairs8[p] : pairs32[p];
+                int            dst = pr[0], rm = dst > RM_MEM ? RM_MEM : dst, n = 0;
+                if (dst > RM_MEM)
+                    v.target[n++] = 0xf0;
+                if (size == 16)
+                    v.target[n++] = 0x66;
+                v.target[n++] = 0x0f;
+                v.target[n++] = size == 8 ? op8 : op8 | 1;
+                n             = put_modrm(v.target, n, pr[1], rm);
+                v.target_len  = n;
+                v.arg         = size;
+                v.faults_ok   = 0;
+                set_fix_rm(&v, rm, fix_cx);
+                run_keep(&v, 3);
             }
             /* LOCK on a register destination: #UD */
             {
@@ -554,24 +592,25 @@ group_cmpxchg(void)
                 v.target_len  = n;
                 v.faults_ok   = 1;
                 set_fix_rm(&v, R_ECX, 0);
-                run_ctx(&v, ctx_some, 3, 2);
+                run_plain(&v, 1);
             }
         }
     }
     /* CMPXCHG8B. Never with LOCK and a register operand (F0 0F C7 C8+):
        that is the Pentium's F00F erratum and hangs the machine. */
     if (g_cpu.features & (1u << 8)) { /* CX8 */
-        static const uint8_t forms[3][4] = { { 0x0f, 0xc7, 0x0e }, { 0xf0, 0x0f, 0xc7, 0x0e }, { 0x0f, 0xc7, 0xc9 } };
-        static const uint8_t lens[3]     = { 3, 4, 3 };
+        static const struct {
+            uint8_t len, b[4];
+        } forms[] = { { SEQ(0x0f, 0xc7, 0x0e) }, { SEQ(0xf0, 0x0f, 0xc7, 0x0e) }, { SEQ(0x0f, 0xc7, 0xc9) } };
         for (int f = 0; f < 3; f++) {
-            memcpy(v.target, forms[f], lens[f]);
-            v.target_len = lens[f];
+            memcpy(v.target, forms[f].b, forms[f].len);
+            v.target_len = forms[f].len;
             v.defmask    = dm_cx8;
             v.fix_input  = fix_cx8;
             v.reg_fix    = 0;
             v.norm       = 1 << R_ESI;
             v.faults_ok  = f == 2; /* the register form is #UD */
-            run_ctx(&v, ctx_keep, 3, 16);
+            run_keep(&v, 3);
         }
     }
     group_end(name);
@@ -579,20 +618,8 @@ group_cmpxchg(void)
 
 /* ---- DAA DAS AAA AAS AAM AAD SALC ----------------------------------------- */
 
-/* AL and AH as packed or unpacked BCD half the time. */
-static void
-fix_bcd(const struct variant *v)
-{
-    if (rnd() & 1) {
-        uint32_t al = ((rnd() % 10) << 4) | (rnd() % 10);
-        uint32_t ah = rnd() % 10;
-        if (rnd() & 1)
-            al = rnd() % 10; /* unpacked */
-        g_in.eax = (g_in.eax & 0xffff0000u) | (ah << 8) | al;
-    }
-}
-
-/* fx_arg: 0 DAA/DAS, 1 AAA/AAS, 2 AAM/AAD, 3 SALC. */
+/* fx_arg: 0 DAA/DAS, 1 AAA/AAS, 2 AAM/AAD, 3 SALC. The arithmetic over
+   every AL, AF and CF is in exhaust8; here, each after every producer. */
 static int
 dm_bcd(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
 {
@@ -612,42 +639,45 @@ group_bcd(void)
 {
     static const uint8_t imms[] = { 0, 1, 2, 7, 10, 16, 255 };
     const char          *name   = "bcd";
-    struct variant       v      = { .group = name, .fx = FX_CUSTOM, .defmask = dm_bcd,
-                                    .fix_input = fix_bcd, .reg_fix = 1, .faults_ok = 1 };
+    struct variant       v      = { .group = name, .fx = FX_CUSTOM, .defmask = dm_bcd, .faults_ok = 1 };
     group_begin(name);
-    for (int i = 0; i < 4; i++) { /* DAA DAS AAA AAS */
+    for (int i = 0; i < 4; i++) { /* DAA DAS AAA AAS: read AF and CF */
         static const uint8_t ops[4] = { 0x27, 0x2f, 0x37, 0x3f };
         v.target[0]  = ops[i];
         v.target_len = 1;
         v.fx_arg     = i >> 1;
-        run_all_contexts(&v, 4);
+        run_flags(&v, 1);
     }
-    for (int op = 0xd4; op <= 0xd5; op++) { /* AAM, AAD; AAM 0 is #DE */
+    for (int op = 0xd4; op <= 0xd5; op++) { /* AAM, AAD in any base; AAM 0 is #DE */
         for (unsigned k = 0; k < sizeof(imms); k++) {
             v.target[0]  = op;
             v.target[1]  = imms[k];
             v.target_len = 2;
             v.fx_arg     = 2;
-            run_all_contexts(&v, 4);
+            run_plain(&v, 2);
         }
     }
-    v.target[0]  = 0xd6; /* SALC */
+    v.target[0]  = 0xd6; /* SALC: reads CF */
     v.target_len = 1;
     v.fx_arg     = 3;
-    run_all_contexts(&v, 4);
+    run_flags(&v, 1);
     group_end(name);
 }
 
 /* ---- MOVS CMPS STOS LODS SCAS, with and without REP ----------------------- */
 
-/* ESI in the first half of the buffer, EDI in the second, both walking
-   down from near the top when DF is set. arg: size; arg2: REP prefix;
-   arg3 bit 0: 16-bit addressing (the low buffer). */
+/* The cases, in order: DF clear and set, each with a count of 0, 1 and 5
+   (for REP), and the strings equal (CMPS) or the accumulator present
+   (SCAS) half of them; then random. arg: size; arg2: REP prefix; arg3
+   bit 0: 16-bit addressing (the low buffer). */
 static void
 fix_str(const struct variant *v)
 {
-    int size = v->arg, rep = v->arg2;
+    static const uint8_t counts[3] = { 0, 1, 5 };
+    int                  size = v->arg, rep = v->arg2, e = edge(6);
 
+    if (e >= 0)
+        g_in.flags = (g_in.flags & ~0x400u) | ((e & 1) << 10);
     if (v->arg3 & 1) {
 #ifdef HOSTTEST
         g_skip = 1;
@@ -655,20 +685,20 @@ fix_str(const struct variant *v)
         g_in.flags &= ~0x400u; /* stay inside the 16-byte low buffer */
         g_in.esi = (rnd() & 0xffff0000u) | ((uint32_t) LOWBUF + (rnd() & 1));
         g_in.edi = (rnd() & 0xffff0000u) | ((uint32_t) LOWBUF + 6 + (rnd() & 1));
-        g_in.ecx = (rnd() & 0xffff0000u) | (rnd() % 3);
+        g_in.ecx = (rnd() & 0xffff0000u) | (e >= 0 ? counts[e >> 1] % 3 : rnd() % 3);
         return;
     }
     int down = (g_in.flags & 0x400) != 0;
     g_in.esi = (uint32_t) g_buf + (down ? 24 : 0) + (rnd() & 7);
     g_in.edi = g_in.esi + 32;
-    g_in.ecx = rep ? rnd() % 10 : rnd_operand();
-    /* CMPS: the strings agree up to one flipped bit, half the time. */
-    if (rnd() & 1) {
+    g_in.ecx = !rep ? rnd_operand() : e >= 0 ? counts[e >> 1] : rnd() % 10;
+    /* CMPS: the strings agree up to one flipped bit. */
+    if (e >= 0 ? (e >> 1) != 1 : (rnd() & 1)) {
         memcpy(g_in.buf + 32, g_in.buf, 32);
         g_in.buf[32 + (rnd() & 31)] ^= 1 << (rnd() & 7);
     }
     /* SCAS: the accumulator matches an element some way along. */
-    if (rnd() & 1) {
+    if (e >= 0 ? (e >> 1) != 0 : (rnd() & 1)) {
         int k = rnd() % 6;
         int o = (int) (g_in.edi - (uint32_t) g_buf) + (down ? -k : k) * (size / 8);
         if (o >= 0 && o + 4 <= BUF_SIZE)
@@ -711,24 +741,26 @@ group_string(void)
                     v.fx_arg     = cmp;
                     v.no_ref     = a16;
                     v.norm       = a16 ? 0 : (1 << R_ESI) | (1 << R_EDI);
-                    run_ctx(&v, ctx_keep, 3, 6);
+                    run_keep(&v, rep ? 7 : 3);
                 }
             }
         }
     }
     /* A segment override on the source: ES: MOVSD, REP ES: MOVSB. */
     {
-        static const uint8_t seqs[2][3] = { { 0x26, 0xa5 }, { 0xf3, 0x26, 0xa4 } };
+        static const struct {
+            uint8_t len, b[3];
+        } seqs[2] = { { SEQ(0x26, 0xa5) }, { SEQ(0xf3, 0x26, 0xa4) } };
         for (int i = 0; i < 2; i++) {
-            memcpy(v.target, seqs[i], 3);
-            v.target_len = i ? 3 : 2;
+            memcpy(v.target, seqs[i].b, seqs[i].len);
+            v.target_len = seqs[i].len;
             v.arg        = i ? 8 : 32;
             v.arg2       = i;
             v.arg3       = 0;
             v.fx_arg     = 0;
             v.no_ref     = 0;
             v.norm       = (1 << R_ESI) | (1 << R_EDI);
-            run_ctx(&v, ctx_keep, 3, 6);
+            run_keep(&v, 7);
         }
     }
     group_end(name);
@@ -739,10 +771,16 @@ group_string(void)
 /* EFLAGS as POPF may load them: anything but TF and IF. */
 #define POPF_MASK 0x0027ffffu
 
+/* EDI, the value POPF loads: none of the flags, all of them, then
+   random. */
 static void
 fix_popf(const struct variant *v)
 {
-    g_in.edi = rnd() & ~0x300u;
+    switch (edge(2)) {
+        case 0: g_in.edi = 0; break;
+        case 1: g_in.edi = ~0x300u; break;
+        default: g_in.edi = rnd() & ~0x300u; break;
+    }
 }
 
 /* arg2: 1 = PUSHF of the lazy flags into ESI (the producer's undefined
@@ -761,18 +799,18 @@ static void
 group_popf(void)
 {
     static const struct {
-        uint8_t len, pushf;
+        uint8_t pushf, len;
         uint8_t b[14];
     } seqs[] = {
-        { 2, 0, { 0x57, 0x9d } },                                       /* push edi; popfd */
-        { 4, 0, { 0x66, 0x57, 0x66, 0x9d } },                           /* push di; popf */
-        { 10, 1, { 0x9c, 0x5e, 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0 } },  /* pushfd; pop esi; scrub */
-        { 11, 1, { 0x66, 0x9c, 0x66, 0x5e, 0x66, 0xc7, 0x44, 0x24, 0xfe, 0, 0 } }, /* pushf; pop si; scrub */
-        { 4, 0, { 0x57, 0x9d, 0x9c, 0x5e } },                           /* popfd; pushfd; pop esi */
-        { 8, 0, { 0x57, 0x9d, 0x0f, 0x92, 0xc0, 0x0f, 0x90, 0xc4 } },   /* popfd; setb al; seto ah */
-        { 4, 0, { 0x57, 0x9d, 0x11, 0xd1 } },                           /* popfd; adc ecx, edx */
-        { 3, 0, { 0x57, 0x9d, 0x9f } },                                 /* popfd; lahf */
-        { 7, 0, { 0x66, 0x57, 0x66, 0x9d, 0x0f, 0x94, 0xc0 } },         /* popf; setz al */
+        { 0, SEQ(0x57, 0x9d) },                                                /* push edi; popfd */
+        { 0, SEQ(0x66, 0x57, 0x66, 0x9d) },                                    /* push di; popf */
+        { 1, SEQ(0x9c, 0x5e, 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0) },            /* pushfd; pop esi; scrub */
+        { 1, SEQ(0x66, 0x9c, 0x66, 0x5e, 0x66, 0xc7, 0x44, 0x24, 0xfe, 0, 0) }, /* pushf; pop si; scrub */
+        { 0, SEQ(0x57, 0x9d, 0x9c, 0x5e) },                                    /* popfd; pushfd; pop esi */
+        { 0, SEQ(0x57, 0x9d, 0x0f, 0x92, 0xc0, 0x0f, 0x90, 0xc4) },            /* popfd; setb al; seto ah */
+        { 0, SEQ(0x57, 0x9d, 0x11, 0xd1) },                                    /* popfd; adc ecx, edx */
+        { 0, SEQ(0x57, 0x9d, 0x9f) },                                          /* popfd; lahf */
+        { 0, SEQ(0x66, 0x57, 0x66, 0x9d, 0x0f, 0x94, 0xc0) },                  /* popf; setz al */
     };
     const char    *name = "popf.pushf";
     struct variant v    = { .group = name, .fx = FX_CUSTOM, .defmask = dm_popf, .fix_input = fix_popf,
@@ -783,9 +821,9 @@ group_popf(void)
         v.target_len = seqs[i].len;
         v.arg2       = seqs[i].pushf;
         if (seqs[i].pushf)
-            run_all_contexts(&v, 6); /* PUSHF makes every lazy state concrete */
+            run_flags(&v, 1); /* PUSHF makes every lazy state concrete */
         else
-            run_ctx(&v, ctx_some, 3, 16);
+            run_plain(&v, 4);
     }
     group_end(name);
 }
@@ -804,32 +842,32 @@ static void
 group_stack(void)
 {
     static const struct {
-        uint8_t len, frame;
+        uint8_t frame, len;
         uint8_t b[12];
     } seqs[] = {
-        { 10, 0, { 0x54, 0x5e, 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0 } },       /* push esp; pop esi; scrub */
-        { 4, 0, { 0x57, 0x8f, 0x04, 0x24 } },                                 /* push edi; pop [esp] */
-        { 6, 0, { 0x57, 0x57, 0x8f, 0x44, 0x24, 0x04 } },                     /* pop [esp+4] */
-        { 4, 0, { 0x57, 0xff, 0x34, 0x24 } },                                 /* push [esp] */
-        { 10, 0, { 0x60, 0x61, 0xc7, 0x44, 0x24, 0xec, 0, 0, 0, 0 } },        /* pushad; popad; scrub ESP slot */
-        { 11, 0, { 0x66, 0x60, 0x66, 0x61, 0x66, 0xc7, 0x44, 0x24, 0xf6, 0, 0 } }, /* pushaw; popaw */
-        { 3, 0, { 0x6a, 0x80, 0x58 } },                                       /* push -128; pop eax */
-        { 5, 0, { 0x66, 0x6a, 0x80, 0x66, 0x58 } },                           /* push word -128; pop ax */
-        { 6, 0, { 0x68, 0x78, 0x56, 0x34, 0x12, 0x5b } },                     /* push imm32; pop ebx */
-        { 2, 0, { 0x57, 0x5c } },                                             /* push edi; pop esp */
-        { 10, 0, { 0x1e, 0x1f, 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0 } },        /* push ds; pop ds */
-        { 10, 0, { 0x16, 0x17, 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0 } },        /* push ss; pop ss */
-        { 4, 1, { 0xc8, 0x00, 0x00, 0x00 } },                                 /* enter 0, 0 */
-        { 4, 1, { 0xc8, 0x08, 0x00, 0x01 } },                                 /* enter 8, 1 */
-        { 4, 1, { 0xc8, 0x10, 0x00, 0x02 } },                                 /* enter 16, 2 */
-        { 4, 1, { 0xc8, 0x00, 0x01, 0x05 } },                                 /* enter 256, 5 */
-        { 4, 1, { 0xc8, 0x04, 0x00, 0x1f } },                                 /* enter 4, 31 */
-        { 4, 1, { 0xc8, 0x04, 0x00, 0x20 } },                                 /* enter 4, 32 (= 0) */
-        { 4, 1, { 0xc8, 0x04, 0x00, 0x21 } },                                 /* enter 4, 33 (= 1) */
-        { 5, 1, { 0x66, 0xc8, 0x08, 0x00, 0x03 } },                           /* enter, 16-bit */
-        { 1, 1, { 0xc9 } },                                                   /* leave */
-        { 2, 1, { 0x66, 0xc9 } },                                             /* leave, 16-bit */
-        { 5, 1, { 0xc8, 0x10, 0x00, 0x03, 0xc9 } },                           /* enter 16, 3; leave */
+        { 0, SEQ(0x54, 0x5e, 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0) },          /* push esp; pop esi; scrub */
+        { 0, SEQ(0x57, 0x8f, 0x04, 0x24) },                                  /* push edi; pop [esp] */
+        { 0, SEQ(0x57, 0x57, 0x8f, 0x44, 0x24, 0x04) },                      /* pop [esp+4] */
+        { 0, SEQ(0x57, 0xff, 0x34, 0x24) },                                  /* push [esp] */
+        { 0, SEQ(0x60, 0x61, 0xc7, 0x44, 0x24, 0xec, 0, 0, 0, 0) },          /* pushad; popad; scrub ESP slot */
+        { 0, SEQ(0x66, 0x60, 0x66, 0x61, 0x66, 0xc7, 0x44, 0x24, 0xf6, 0, 0) }, /* pushaw; popaw */
+        { 0, SEQ(0x6a, 0x80, 0x58) },                                        /* push -128; pop eax */
+        { 0, SEQ(0x66, 0x6a, 0x80, 0x66, 0x58) },                            /* push word -128; pop ax */
+        { 0, SEQ(0x68, 0x78, 0x56, 0x34, 0x12, 0x5b) },                      /* push imm32; pop ebx */
+        { 0, SEQ(0x57, 0x5c) },                                              /* push edi; pop esp */
+        { 0, SEQ(0x1e, 0x1f, 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0) },          /* push ds; pop ds */
+        { 0, SEQ(0x16, 0x17, 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0) },          /* push ss; pop ss */
+        { 1, SEQ(0xc8, 0x00, 0x00, 0x00) },                                  /* enter 0, 0 */
+        { 1, SEQ(0xc8, 0x08, 0x00, 0x01) },                                  /* enter 8, 1 */
+        { 1, SEQ(0xc8, 0x10, 0x00, 0x02) },                                  /* enter 16, 2 */
+        { 1, SEQ(0xc8, 0x00, 0x01, 0x05) },                                  /* enter 256, 5 */
+        { 1, SEQ(0xc8, 0x04, 0x00, 0x1f) },                                  /* enter 4, 31 */
+        { 1, SEQ(0xc8, 0x04, 0x00, 0x20) },                                  /* enter 4, 32 (= 0) */
+        { 1, SEQ(0xc8, 0x04, 0x00, 0x21) },                                  /* enter 4, 33 (= 1) */
+        { 1, SEQ(0x66, 0xc8, 0x08, 0x00, 0x03) },                            /* enter, 16-bit */
+        { 1, SEQ(0xc9) },                                                    /* leave */
+        { 1, SEQ(0x66, 0xc9) },                                              /* leave, 16-bit */
+        { 1, SEQ(0xc8, 0x10, 0x00, 0x03, 0xc9) },                            /* enter 16, 3; leave */
     };
     const char    *name = "stack";
     struct variant v    = { .group = name, .stack = 1 };
@@ -840,7 +878,7 @@ group_stack(void)
         v.fix_input  = seqs[i].frame ? fix_frame : 0;
         v.reg_fix    = 1;
         v.norm       = seqs[i].frame ? 1 << R_EBP : (seqs[i].b[0] == 0x54 ? 1 << R_ESI : 0);
-        run_ctx(&v, ctx_some, 3, 4);
+        run_plain(&v, 1);
     }
     group_end(name);
 }
@@ -986,17 +1024,18 @@ emit_far(struct emit *e, const struct variant *v)
 static void
 group_far(void)
 {
-    static const uint8_t sigs[7][2] = { { 0x9a, 0xcb }, { 0x9a, 0xca }, { 0xff, 0x1d }, { 0xea },
-                                        { 0xff, 0x2d }, { 0xe8, 0xc2 }, { 0xcf } };
-    static const uint8_t lens[7]    = { 2, 2, 2, 1, 2, 2, 1 };
-    const char          *name       = "far.call";
-    struct variant       v          = { .group = name, .stack = 1, .emit = emit_far };
+    static const struct {
+        uint8_t len, b[2];
+    } sigs[7] = { { SEQ(0x9a, 0xcb) }, { SEQ(0x9a, 0xca) }, { SEQ(0xff, 0x1d) }, { SEQ(0xea) },
+                  { SEQ(0xff, 0x2d) }, { SEQ(0xe8, 0xc2) }, { SEQ(0xcf) } };
+    const char    *name = "far.call";
+    struct variant v    = { .group = name, .stack = 1, .emit = emit_far };
     group_begin(name);
     for (int k = 0; k < 7; k++) {
-        memcpy(v.target, sigs[k], lens[k]); /* for the reports only */
-        v.target_len = lens[k];
+        memcpy(v.target, sigs[k].b, sigs[k].len); /* for the reports only */
+        v.target_len = sigs[k].len;
         v.arg2       = k;
-        run_ctx(&v, ctx_some, 3, 4);
+        run_plain(&v, 1);
     }
     group_end(name);
 }
@@ -1007,19 +1046,18 @@ static void
 group_int(void)
 {
     static const struct {
-        uint8_t len;
-        uint8_t b[3];
+        uint8_t reads_flags, len, b[3];
     } seqs[] = {
-        { 1, { 0xcc } },             /* INT3 */
-        { 2, { 0xcd, 0x03 } },       /* INT 3 */
-        { 2, { 0xcd, 0x00 } },       /* INT 0 */
-        { 1, { 0xce } },             /* INTO: traps only with OF */
-        { 1, { 0xf1 } },             /* ICEBP */
-        { 2, { 0xcd, 0x40 } },       /* INT 40h, beyond the IDT: #GP(0x202) */
-        { 2, { 0x0f, 0x0b } },       /* UD2 */
-        { 2, { 0xf0, 0x90 } },       /* LOCK NOP: #UD */
-        { 2, { 0x8d, 0xc0 } },       /* LEA with a register: #UD (not LES/LDS: VEX on newer CPUs) */
-        { 2, { 0x8e, 0xc8 } },       /* MOV CS, AX: #UD */
+        { 0, SEQ(0xcc) },       /* INT3 */
+        { 0, SEQ(0xcd, 0x03) }, /* INT 3 */
+        { 0, SEQ(0xcd, 0x00) }, /* INT 0 */
+        { 1, SEQ(0xce) },       /* INTO: traps only with OF */
+        { 0, SEQ(0xf1) },       /* ICEBP */
+        { 0, SEQ(0xcd, 0x40) }, /* INT 40h, beyond the IDT: #GP(0x202) */
+        { 0, SEQ(0x0f, 0x0b) }, /* UD2 */
+        { 0, SEQ(0xf0, 0x90) }, /* LOCK NOP: #UD */
+        { 0, SEQ(0x8d, 0xc0) }, /* LEA with a register: #UD (not LES/LDS: VEX on newer CPUs) */
+        { 0, SEQ(0x8e, 0xc8) }, /* MOV CS, AX: #UD */
     };
     const char    *name = "int.ud";
     struct variant v    = { .group = name, .faults_ok = 1 };
@@ -1027,38 +1065,66 @@ group_int(void)
     for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
         memcpy(v.target, seqs[i].b, seqs[i].len);
         v.target_len = seqs[i].len;
-        run_ctx(&v, ctx_some, 3, 4);
+        if (seqs[i].reads_flags)
+            run_flags(&v, 1);
+        else
+            run_plain(&v, 1);
     }
     group_end(name);
 }
 
 /* ---- BOUND, ARPL ---------------------------------------------------------- */
 
-/* Bounds at [ebx] and [ebx+size]; the index below, inside, on or above. */
+/* Bounds at [ebx] and [ebx+size]; the index below, on the low bound,
+   inside, on the high bound, above, and with the bounds reversed; then
+   random. */
 static void
 fix_bound(const struct variant *v)
 {
-    int     size = v->arg;
-    int32_t lo   = (int32_t) rnd_operand(), hi = (int32_t) rnd_operand(), x;
-    g_in.ebx     = (uint32_t) g_buf + MEM_OFF;
+    int     size = v->arg, e = edge(6);
+    int32_t lo = (int32_t) rnd_operand(), hi = (int32_t) rnd_operand();
+    g_in.ebx   = (uint32_t) g_buf + MEM_OFF;
     if (size == 16) {
         lo = (int16_t) lo;
         hi = (int16_t) hi;
     }
-    if ((rnd() & 3) && lo > hi) {
+    /* Ordered bounds (reversed for case 5), at least one apart. */
+    if ((lo > hi) != (e == 5)) {
         int32_t t = lo;
         lo        = hi;
         hi        = t;
     }
+    if (lo == hi)
+        lo = (int32_t) ((uint32_t) lo - 1);
+    if (size == 16)
+        lo = (int16_t) lo;
     put_le(g_in.buf + MEM_OFF, (uint32_t) lo, size / 8);
     put_le(g_in.buf + MEM_OFF + size / 8, (uint32_t) hi, size / 8);
-    switch (rnd() & 3) {
-        case 0: x = (int32_t) rnd(); break;
-        case 1: x = lo - (rnd() & 1); break;
-        case 2: x = hi + (rnd() & 1); break;
-        default: x = hi >= lo ? lo + (int32_t) (rnd() % ((uint32_t) (hi - lo) + 1)) : lo; break;
+    uint32_t x;
+    switch (e) {
+        case 0: x = (uint32_t) lo - 1; break;
+        case 1: x = (uint32_t) lo; break;
+        case 2: x = hi > lo ? (uint32_t) lo + rnd() % ((uint32_t) hi - (uint32_t) lo) : (uint32_t) lo; break;
+        case 3: x = (uint32_t) hi; break;
+        case 4: x = (uint32_t) hi + 1; break;
+        case 5: x = (uint32_t) lo; break;
+        default: x = rnd(); break;
     }
-    set_opnd(v->arg2, size, (uint32_t) x);
+    set_opnd(v->arg2, size, x);
+}
+
+/* ARPL: the destination's RPL below, equal to and above the source's, then
+   random. */
+static void
+fix_arpl(const struct variant *v)
+{
+    fix_rm(v);
+    int e = edge(3);
+    if (e >= 0) {
+        uint32_t src = get_opnd(v->arg3, 16) & ~3u, dst = get_opnd(v->arg2, 16) & ~3u;
+        set_opnd(v->arg3, 16, src | 2);
+        set_opnd(v->arg2, 16, dst | (e == 0 ? 1 : e == 1 ? 2 : 3));
+    }
 }
 
 /* ARPL writes ZF only. */
@@ -1073,7 +1139,7 @@ dm_arpl(const struct variant *v, const struct kin *in, struct kout *d, uint16_t 
 static void
 group_bound_arpl(void)
 {
-    static const uint8_t regs[] = { R_EAX, R_ECX, R_EDX, R_EBP, R_ESI, R_EDI };
+    static const uint8_t regs[] = { R_EAX, R_ECX, R_ESI };
     const char          *name   = "bound.arpl";
     struct variant       v      = { .group = name, .faults_ok = 1 };
     group_begin(name);
@@ -1090,7 +1156,7 @@ group_bound_arpl(void)
             v.fix_input   = fix_bound;
             v.reg_fix     = 0;
             v.norm        = 1 << R_EBX;
-            run_ctx(&v, ctx_keep, 3, 8);
+            run_keep(&v, 7);
         }
     }
     /* BOUND with a register operand: #UD. From AVX-512 on, 62 with a
@@ -1101,21 +1167,19 @@ group_bound_arpl(void)
         v.target_len = 2;
         v.fix_input  = 0;
         v.norm       = 0;
-        run_ctx(&v, ctx_some, 3, 2);
+        run_plain(&v, 1);
     }
 
     /* ARPL r/m16, r16 */
-    static const uint8_t dsts[] = { R_EAX, R_EBX, R_ESI, RM_MEM };
-    static const uint8_t srcs[] = { R_ECX, R_EDX, R_EDI };
+    static const uint8_t pairs[3][2] = { { R_EAX, R_ECX }, { RM_MEM, R_EDX }, { R_ESI, R_ESI } }; /* dst, src */
     v.fx      = FX_CUSTOM;
     v.defmask = dm_arpl;
-    for (unsigned d = 0; d < sizeof(dsts); d++) {
-        for (unsigned s = 0; s < sizeof(srcs); s++) {
-            v.target[0]  = 0x63;
-            v.target_len = put_modrm(v.target, 1, srcs[s], dsts[d]);
-            set_fix_rm(&v, dsts[d], dsts[d] == RM_MEM ? fix_rm : 0);
-            run_ctx(&v, ctx_some, 3, 4);
-        }
+    for (int p = 0; p < 3; p++) {
+        v.target[0]  = 0x63;
+        v.target_len = put_modrm(v.target, 1, pairs[p][1], pairs[p][0]);
+        v.arg3       = pairs[p][1];
+        set_fix_rm(&v, pairs[p][0], fix_arpl);
+        run_keep(&v, 4);
     }
     group_end(name);
 }
@@ -1134,23 +1198,22 @@ static void
 group_misc(void)
 {
     static const struct {
-        uint8_t len, fix;
-        uint8_t b[3];
+        uint8_t fix, reads_flags, len, b[3];
     } seqs[] = {
-        { 1, 1, { 0xd7 } },             /* XLAT */
-        { 1, 0, { 0xf5 } },             /* CMC */
-        { 1, 0, { 0xf8 } },             /* CLC */
-        { 1, 0, { 0xf9 } },             /* STC */
-        { 1, 0, { 0xfc } },             /* CLD */
-        { 1, 0, { 0xfd } },             /* STD */
-        { 1, 0, { 0x9b } },             /* WAIT */
-        { 2, 0, { 0x66, 0x90 } },       /* xchg ax, ax */
-        { 2, 0, { 0xf3, 0x90 } },       /* PAUSE */
-        { 2, 2, { 0x87, 0x03 } },       /* xchg [ebx], eax */
-        { 2, 2, { 0x86, 0x23 } },       /* xchg [ebx], ah */
-        { 3, 2, { 0x66, 0x87, 0x0b } }, /* xchg [ebx], cx */
-        { 2, 0, { 0x87, 0xca } },       /* xchg edx, ecx */
-        { 2, 0, { 0x86, 0xe0 } },       /* xchg al, ah */
+        { 1, 0, SEQ(0xd7) },             /* XLAT */
+        { 0, 1, SEQ(0xf5) },             /* CMC */
+        { 0, 0, SEQ(0xf8) },             /* CLC */
+        { 0, 0, SEQ(0xf9) },             /* STC */
+        { 0, 0, SEQ(0xfc) },             /* CLD */
+        { 0, 0, SEQ(0xfd) },             /* STD */
+        { 0, 0, SEQ(0x9b) },             /* WAIT */
+        { 0, 0, SEQ(0x66, 0x90) },       /* xchg ax, ax */
+        { 0, 0, SEQ(0xf3, 0x90) },       /* PAUSE */
+        { 2, 0, SEQ(0x87, 0x03) },       /* xchg [ebx], eax */
+        { 2, 0, SEQ(0x86, 0x23) },       /* xchg [ebx], ah */
+        { 2, 0, SEQ(0x66, 0x87, 0x0b) }, /* xchg [ebx], cx */
+        { 0, 0, SEQ(0x87, 0xca) },       /* xchg edx, ecx */
+        { 0, 0, SEQ(0x86, 0xe0) },       /* xchg al, ah */
     };
     const char    *name = "misc";
     struct variant v    = { .group = name };
@@ -1160,9 +1223,11 @@ group_misc(void)
         v.target_len = seqs[i].len;
         v.fix_input  = seqs[i].fix == 1 ? fix_xlat : seqs[i].fix == 2 ? fix_mem_ebx : 0;
         v.arg        = MEM_OFF;
-        v.reg_fix    = 0;
         v.norm       = seqs[i].fix == 1 ? 1 << R_EBX : 0;
-        run_ctx(&v, ctx_some, 3, 6);
+        if (seqs[i].reads_flags)
+            run_flags(&v, 1);
+        else
+            run_plain(&v, 2);
     }
     group_end(name);
 }

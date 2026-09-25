@@ -6,9 +6,9 @@
 #define CPUID_TSC   (1u << 4)
 #define CPUID_CMOV  (1u << 15)
 
-/* CMOVcc: all sixteen conditions, 16- and 32-bit, from a register, the
-   same register, and memory (aligned and misaligned; the load happens
-   whether or not the move does), after every flag producer. */
+/* CMOVcc: all sixteen conditions, 16- and 32-bit, from a register and from
+   memory (the load happens whether or not the move does), after every flag
+   producer. */
 static void
 group_cmov(void)
 {
@@ -16,10 +16,7 @@ group_cmov(void)
         uint8_t dst, src, disp;
     } forms[] = {
         { R_EAX, R_ECX, 0 },
-        { R_EDX, R_EDX, 0 },
-        { R_ESI, R_EDI, 0 },
         { R_EBP, RM_MEM, 0 },
-        { R_EDI, RM_MEM, 31 }, /* [ebx+31] */
     };
     const char    *name = "cmov";
     struct variant v    = { .group = name, .fx = FX_SETCC };
@@ -46,7 +43,7 @@ group_cmov(void)
                 v.fx_arg     = cc;
                 v.fix_input  = forms[f].src == RM_MEM ? fix_mem_ebx : 0;
                 v.arg        = MEM_OFF;
-                run_all_contexts(&v, 2);
+                run_flags(&v, 1);
             }
         }
     }
@@ -91,7 +88,7 @@ group_rdtsc(void)
     group_begin(name);
     memcpy(v.target, seq, sizeof(seq));
     v.target_len = sizeof(seq);
-    run_ctx(&v, ctx_some, 3, 8);
+    run_plain(&v, 2);
     group_end(name);
 }
 
@@ -106,17 +103,17 @@ group_nop_p6(void)
         uint8_t len;
         uint8_t b[9];
     } seqs[] = {
-        { 3, { 0x0f, 0x1f, 0x00 } },                                     /* nop [eax] */
-        { 4, { 0x0f, 0x1f, 0x40, 0x00 } },                               /* nop [eax+0] */
-        { 5, { 0x0f, 0x1f, 0x44, 0x00, 0x00 } },                         /* nop [eax+eax*1+0] */
-        { 6, { 0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00 } },                   /* nop word [...] */
-        { 7, { 0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00 } },             /* nop [eax+0L] */
-        { 8, { 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 } },       /* nop [eax+eax*1+0L] */
-        { 9, { 0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 } }, /* nop word [...+0L] */
-        { 3, { 0x0f, 0x1f, 0xc0 } },                                     /* nop eax */
-        { 3, { 0x0f, 0x19, 0x00 } },                                     /* reserved NOP 0F 19 */
-        { 3, { 0x0f, 0x1c, 0xc1 } },                                     /* reserved NOP 0F 1C */
-        { 3, { 0x0f, 0x1e, 0x03 } },                                     /* reserved NOP 0F 1E */
+        { SEQ(0x0f, 0x1f, 0x00) },                                     /* nop [eax] */
+        { SEQ(0x0f, 0x1f, 0x40, 0x00) },                               /* nop [eax+0] */
+        { SEQ(0x0f, 0x1f, 0x44, 0x00, 0x00) },                         /* nop [eax+eax*1+0] */
+        { SEQ(0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00) },                   /* nop word [...] */
+        { SEQ(0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00) },             /* nop [eax+0L] */
+        { SEQ(0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00) },       /* nop [eax+eax*1+0L] */
+        { SEQ(0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00) }, /* nop word [...+0L] */
+        { SEQ(0x0f, 0x1f, 0xc0) },                                     /* nop eax */
+        { SEQ(0x0f, 0x19, 0x00) },                                     /* reserved NOP 0F 19 */
+        { SEQ(0x0f, 0x1c, 0xc1) },                                     /* reserved NOP 0F 1C */
+        { SEQ(0x0f, 0x1e, 0x03) },                                     /* reserved NOP 0F 1E */
     };
     const char    *name = "nop.p6";
     struct variant v    = { .group = name, .faults_ok = 1 };
@@ -124,7 +121,7 @@ group_nop_p6(void)
     for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
         memcpy(v.target, seqs[i].b, seqs[i].len);
         v.target_len = seqs[i].len;
-        run_ctx(&v, ctx_some, 3, 2);
+        run_plain(&v, 1);
     }
     group_end(name);
 }

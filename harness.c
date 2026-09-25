@@ -1181,7 +1181,7 @@ cmain(uint32_t rom_base)
     ram_detect();
     arena_init();
 
-    puts_("\nCPUTEST 2 rom=");
+    puts_("\nCPUTEST 3 rom=");
     puthex(rom_base, 5);
     puts_(" ram=");
     putdec(g_ram_top >> 20);
