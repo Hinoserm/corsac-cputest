@@ -152,7 +152,7 @@ goes into the group that already covers it, not into a group of its own.
 | 252 | `r3.popseg` | POP DS/ES/FS/GS/SS at CPL 3 of good, other-ring, DPL-0, null, TSS, code, execute-only, read-only and missing selectors |
 | 253 | `r1.popseg` | the same at CPL 1 |
 | 254 | `gateparams` | call gates copying three parameters into ring 1 from rings 3, 2, 1; gates to ring-3 code; a DPL-1 gate outward |
-| 255 | `tf.step` | single-step (TF) after 16 kinds of instruction: where the trap lands, DR6.BS, and what beats it (INT3, ICEBP, UD2) |
+| 255 | `tf.step` | single-step (TF) after 16 kinds of instruction: where the trap lands, DR6.BS, and what beats it (INT3, ICEBP, UD2); on a P6, DEBUGCTL.BTF (the trap waits for a taken JMP, CALL or Jcc) and LBR (LastBranchFromIP/ToIP after a JMP) |
 | 256 | `tf.shadow` | MOV SS and POP SS hold off the single-step trap for one instruction; STI and MOV DS don't |
 | 257 | `tf.rep` | REP MOVS/STOS/CMPS/SCAS/LODS under TF: one iteration per trap, counts 5, 1 and 0 |
 | 258 | `dr.exec` | instruction breakpoints in each of DR0-DR3, on a prefixed instruction's first byte and past the prefix; globally enabled, not enabled |

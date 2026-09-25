@@ -89,6 +89,81 @@ dbg_begin(const char *name)
 
 /* ---- TF: after which instruction the trap comes, and DR6.BS ---------- */
 
+/* The P6's DEBUGCTL (1D9h, arg3): with BTF (bit 1) the single-step trap
+   waits for a taken branch, so it comes after the JMP, the CALL or the
+   taken JZ and never for straight-line code or a branch not taken; with
+   LBR (bit 0) LastBranchFromIP and LastBranchToIP (1DBh, 1DCh) hold the
+   last JMP's own address and its target (ESI and EDI, made relative to
+   them; 0 when right). DEBUGCTL is cleared after each run. */
+static void
+btf_before(const struct variant *v)
+{
+    dbg_before(v);
+#ifndef HOSTTEST
+    wrmsr_(0x1d9, v->arg3, 0);
+#endif
+}
+
+static void
+btf_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    wrmsr_(0x1d9, 0, 0);
+#endif
+    dbg_after(v);
+}
+
+static void
+emit_lbr(struct emit *e, const struct variant *v)
+{
+    uint32_t from = (uint32_t) e->p;
+    e8(e, 0xeb); /* jmp $+2 */
+    e8(e, 0x00);
+    uint32_t to = (uint32_t) e->p;
+    for (int k = 0; k < 2; k++) {
+        e8(e, 0xb9); /* mov ecx, 1DBh or 1DCh */
+        e32(e, 0x1db + k);
+        e8(e, 0x0f); /* rdmsr */
+        e8(e, 0x32);
+        e8(e, 0x2d); /* sub eax, the address */
+        e32(e, k ? to : from);
+        e8(e, 0x89); /* mov esi or edi, eax */
+        e8(e, k ? 0xc7 : 0xc6);
+    }
+    static const uint8_t clear[] = { 0x31, 0xc0, 0x31, 0xd2, 0x31, 0xc9 }; /* EAX EDX ECX: MSR values */
+    ebytes(e, clear, sizeof(clear));
+}
+
+static void
+tf_branches(const char *name)
+{
+    static const struct {
+        uint8_t len, b[24];
+    } seqs[] = {
+        { SEQ(SET_TF, 0x01, 0xd1, 0x01, 0xd1, 0xeb, 0x00, 0x90) },       /* add; add; jmp: the trap after the JMP */
+        { SEQ(SET_TF, 0x31, 0xc0, 0x75, 0x00, 0x01, 0xd1, 0x74, 0x00, 0x90) }, /* jnz not taken, jz taken */
+        { SEQ(SET_TF, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x5e, 0x31, 0xf6) }, /* call: at the target; pop esi; xor esi, esi */
+        { SEQ(SET_TF, 0x01, 0xd1, 0x90) },                             /* no branch: no trap */
+    };
+    struct variant v = dbg_variant(name);
+    if (!is_vendor("GenuineIntel") || ((g_cpu.signature >> 8) & 0xf) != 6)
+        return;
+    v.before_run = btf_before;
+    v.after_run  = btf_after;
+    v.arg3       = 2; /* BTF */
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        run_plain(&v, 1);
+    }
+    v.arg3       = 1; /* LBR */
+    v.emit       = emit_lbr;
+    v.target[0]  = 0xeb; /* for the reports */
+    v.target[1]  = 0x00;
+    v.target_len = 2;
+    run_plain(&v, 1);
+}
+
 static void
 group_tf_step(void)
 {
@@ -123,6 +198,7 @@ group_tf_step(void)
         v.arg        = MEM_OFF;
         run_plain(&v, 1);
     }
+    tf_branches(name);
     group_end(name);
 }
 
