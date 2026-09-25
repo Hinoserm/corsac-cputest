@@ -154,6 +154,7 @@ between versions until the group itself changes.
 | 255 | `tf.step` | single-step (TF) after 16 kinds of instruction: where the trap lands, DR6.BS, and what beats it (INT3, ICEBP, UD2) |
 | 256 | `tf.shadow` | MOV SS and POP SS hold off the single-step trap for one instruction; STI and MOV DS don't |
 | 257 | `tf.rep` | REP MOVS/STOS/CMPS/SCAS/LODS under TF: one iteration per trap, counts 5, 1 and 0 |
+| 258 | `dr.exec` | instruction breakpoints in each of DR0-DR3, on a prefixed instruction's first byte and past the prefix; globally enabled, not enabled |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
