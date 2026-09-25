@@ -75,12 +75,12 @@ bios_size = {romsize}
 rom_writes_enabled = 0
 """
 
-# The CF-card image as the primary IDE disk: 1 MB, 64 cylinders, 2 heads,
-# 16 sectors.
+# The CF-card image as the primary IDE disk: 16 MB, 64 cylinders, 16 heads,
+# 32 sectors.
 ATTACH_IMG = """[Hard disks]
 hdd_01_fn = {img}
 hdd_01_ide_channel = 0:0
-hdd_01_parameters = 16, 2, 64, 0, ide
+hdd_01_parameters = 32, 16, 64, 0, ide
 """
 
 
