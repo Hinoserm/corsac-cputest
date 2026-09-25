@@ -33,6 +33,42 @@ smc_restore(const struct variant *v)
         *g_smc_patch = g_smc_orig;
 }
 
+/* Without a jump after the store, a CPU may run the patched instruction as
+   it was or as it became, and a real Pentium does both from one run to the
+   next. Either is right: MOV AL, imm8 gave the new byte (CL) or the old
+   one (0, put back before every run); the canonical result is the new. */
+static void
+canon_smc_byte(const struct variant *v, const struct kin *in, struct kout *o)
+{
+    if ((o->eax & 0xff) == 0)
+        o->eax = (o->eax & ~0xffu) | (o->ecx & 0xff);
+}
+
+/* The loop that repatches ADD ESI, imm8 in its own block three times
+   without a jump: each pass adds the byte it just stored (CL, CL+5,
+   CL+10) or the one before it (0, CL, CL+5), sign-extended. Any of those
+   eight sums is right; the canonical one is all new. */
+static void
+canon_smc_loop(const struct variant *v, const struct kin *in, struct kout *o)
+{
+    uint8_t  cl0 = (uint8_t) (o->ecx - 15), p[3], old[3];
+    uint32_t fresh = 0, d = o->esi - in->esi;
+    for (int i = 0; i < 3; i++) {
+        p[i]   = (uint8_t) (cl0 + 5 * i);
+        old[i] = i ? p[i - 1] : 0;
+        fresh += (uint32_t) (int32_t) (int8_t) p[i];
+    }
+    for (int m = 0; m < 8; m++) {
+        uint32_t sum = 0;
+        for (int i = 0; i < 3; i++)
+            sum += (uint32_t) (int32_t) (int8_t) ((m >> i) & 1 ? old[i] : p[i]);
+        if (sum == d) {
+            o->esi = in->esi + fresh;
+            return;
+        }
+    }
+}
+
 /* arg2 is the kind. The patched instruction is at L; its address is only
    known once emitted, so the store's operand is filled in afterwards. */
 static void
@@ -112,9 +148,8 @@ emit_smc(struct emit *e, const struct variant *v)
 static void
 group_smc(void)
 {
-    /* Signatures for the reports, and whether the result is architectural:
-       without a jump after the store, a 486 may still run the bytes it
-       prefetched. */
+    /* Signatures for the reports. The kinds without a jump accept either
+       outcome (canon_smc_byte, canon_smc_loop). */
     static const struct {
         uint8_t defined, len;
         uint8_t b[3];
@@ -134,7 +169,8 @@ group_smc(void)
         memcpy(v.target, kinds[k].b, kinds[k].len);
         v.target_len = kinds[k].len;
         v.arg2       = k;
-        v.arg3       = kinds[k].defined;
+        v.arg3       = 1;
+        v.canon      = k == 6 ? canon_smc_loop : kinds[k].defined ? 0 : canon_smc_byte;
         run_plain(&v, 2);
     }
     group_end(name);

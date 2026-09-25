@@ -582,6 +582,11 @@ struct variant {
     uint32_t      ring_flags;    /* EFLAGS bits the entry IRET adds: IOPL, AC */
     void        (*before_run)(const struct variant *v); /* before each of the four runs */
     void        (*after_run)(const struct variant *v);  /* after each, before the harness looks at memory */
+    /* Where a real CPU may legitimately give one of several results (code
+       it just overwrote without a jump, say), this rewrites any allowed
+       result to one canonical one before the runs are compared; anything
+       outside the allowed set is left alone, and stops the test. */
+    void        (*canon)(const struct variant *v, const struct kin *in, struct kout *o);
     void        (*emit)(struct emit *e, const struct variant *v); /* instead of target[] */
     defmask_fn    defmask;
 };
@@ -1391,6 +1396,22 @@ emit_ring(struct emit *e, const struct variant *v)
     }
 }
 
+/* A fingerprint of a group's definition: every variant's bytes and
+   settings, as the counting pass meets them. A stored reference is only
+   compared when its fingerprint matches, so changing a group can never
+   make an old reference stop the test. */
+static uint32_t g_defhash, g_group_def;
+
+static void
+def_hash(const struct variant *v)
+{
+    uint32_t f[16] = { v->target_len, v->producer, v->boundary, v->fx, v->fx_arg, v->arg, v->arg2, v->arg3,
+                       v->flags_mask, v->stack | (v->mmx << 1) | (v->code16 << 2) | (v->paging << 3) | (v->faults_ok << 4) | (v->no_ref << 5) | (v->reg_fix << 6),
+                       v->ring, v->ring_flags, v->norm, v->emit != 0, v->defmask != 0, (v->fix_input != 0) | ((v->canon != 0) << 1) };
+    g_defhash = crc_add(g_defhash, v->target, v->target_len);
+    g_defhash = crc_add(g_defhash, f, sizeof(f));
+}
+
 /* One variant with one input, run four times from a fresh address. */
 static void
 run_variant(const struct variant *v)
@@ -1413,6 +1434,7 @@ run_variant(const struct variant *v)
         return;
     if (g_counting) {
         g_stats.tests++;
+        def_hash(v);
         return;
     }
     in = g_in;
@@ -1511,6 +1533,8 @@ run_variant(const struct variant *v)
         if (v->after_run)
             v->after_run(v);
         capture(v, &out[r], slot, vec, mem);
+        if (v->canon && out[r].fault == 0xff)
+            v->canon(v, &in, &out[r]);
         if (v->mmx)
             memcpy(g_mmx_runs[r], g_mmx_out, sizeof(g_mmx_out));
     }
@@ -1706,6 +1730,121 @@ status(void)
     }
 }
 
+/* ---- references: what real CPUs gave ---------------------------------------- */
+
+/* One group's results on one real CPU (refs.inc, made by refs.py from
+   its serial log). skipped: the group didn't run there. */
+struct cpu_ref {
+    const char *vendor; /* CPUID vendor, or "386" / "486-no-cpuid" */
+    uint32_t    sig;
+    const char *group;
+    uint8_t     skipped;
+    uint32_t    tests, def, crc_defined, crc_raw;
+};
+
+static const struct cpu_ref cpu_refs[] = {
+#include "refs.inc"
+    { 0, 0, 0, 0, 0, 0, 0, 0 }
+};
+
+static int
+str_eq(const char *a, const char *b)
+{
+    while (*a && *a == *b)
+        a++, b++;
+    return *a == *b;
+}
+
+static const char *
+cpu_key(void)
+{
+    return g_cpu.has_cpuid ? g_cpu.vendor : g_cpu.is486 ? "486-no-cpuid" : "386";
+}
+
+static const struct cpu_ref *
+ref_find(const char *name)
+{
+    for (const struct cpu_ref *r = cpu_refs; r->group; r++)
+        if (r->sig == (g_cpu.has_cpuid ? g_cpu.signature : 0) && str_eq(r->vendor, cpu_key()) && str_eq(r->group, name))
+            return r;
+    return 0;
+}
+
+static void stop_banner(const char *what);
+static void where_line(void);
+static void halt_forever(void);
+
+/* The end of a group (or its skip): if a real CPU of this model has a
+   reference for it, with the same definition, the results must match. */
+static void
+ref_check(const char *name, int skipped)
+{
+    const struct cpu_ref *r = ref_find(name);
+    if (!r)
+        return;
+    if (!skipped && !r->skipped && r->def != g_group_def) {
+        vga_quiet = 1;
+        puts_("REF ");
+        puts_(name);
+        puts_(" stale: the group has changed since the reference was taken\n");
+        vga_quiet = 0;
+        return;
+    }
+    if (skipped == r->skipped && (skipped || (r->tests == g_stats.tests && r->crc_raw == g_stats.crc_raw && r->crc_defined == g_stats.crc_defined))) {
+        vga_quiet = 1;
+        puts_("REF ");
+        puts_(name);
+        puts_(" matches\n");
+        vga_quiet = 0;
+        return;
+    }
+    stop_banner("differs from the real CPU");
+    vga_quiet = 0;
+    puts_("\n==== STOP: A GROUP DIFFERS FROM WHAT THE REAL CPU GAVE ====\n");
+    where_line();
+    puts_("  reference (the same CPU model, real hardware):\n    ");
+    if (r->skipped)
+        puts_("skipped the group");
+    else {
+        puts_("tests=");
+        putdec(r->tests);
+        puts_(" crc_defined=");
+        puthex(r->crc_defined, 8);
+        puts_(" crc_raw=");
+        puthex(r->crc_raw, 8);
+        puts_(" def=");
+        puthex(r->def, 8);
+    }
+    puts_("\n  this run:\n    ");
+    if (skipped)
+        puts_("skipped the group (a CPUID feature the reference had is missing)");
+    else {
+        puts_("tests=");
+        putdec(g_stats.tests);
+        puts_(" crc_defined=");
+        puthex(g_stats.crc_defined, 8);
+        puts_(" crc_raw=");
+        puthex(g_stats.crc_raw, 8);
+        puts_(" def=");
+        puthex(g_group_def, 8);
+        puts_(" mismatches=");
+        putdec(g_stats.mismatches);
+        puts_(" faults=");
+        putdec(g_stats.faults);
+        puts_(" crc_interp=");
+        puthex(g_stats.crc_interp, 8);
+        puts_(" crc_comp=");
+        puthex(g_stats.crc_comp, 8);
+    }
+    puts_("\n  crc_defined differs: an architectural result differs from the real CPU.\n"
+          "  only crc_raw differs: an undefined flag or result differs (the model's own behaviour).\n"
+          "  To find the test: build with --dump ");
+    puts_(name);
+    puts_(" and run it here and on the real CPU; diffdump.py names every line that differs.\n");
+    puts_("==== STOPPED. Nothing more runs; reset the machine to start again. ====\n");
+    halt_forever();
+}
+
 static void
 group_begin(const char *name)
 {
@@ -1716,8 +1855,10 @@ group_begin(const char *name)
     for (const char *p = name; *p; p++)
         seed = (seed ^ (uint8_t) *p) * 0x01000193;
     rng_state = seed | 1;
-    if (g_counting)
+    if (g_counting) {
+        g_defhash = 0;
         return;
+    }
     g_group_name = name;
     post(++g_group_post);
     puts_("START ");
@@ -1731,7 +1872,8 @@ static void
 group_end(const char *name)
 {
     if (g_counting) {
-        g_expected = g_stats.tests;
+        g_expected  = g_stats.tests;
+        g_group_def = g_defhash;
         return;
     }
     puts_("GROUP ");
@@ -1752,9 +1894,12 @@ group_end(const char *name)
     puthex(g_stats.crc_defined, 8);
     puts_(" crc_raw=");
     puthex(g_stats.crc_raw, 8);
+    puts_(" def=");
+    puthex(g_group_def, 8);
     puts_("\n");
     g_total_tests += g_stats.tests;
     g_total_mismatches += g_stats.mismatches;
+    ref_check(name, 0);
 }
 
 /* A group this CPU can't run: said once, counted as nothing. */
@@ -1769,6 +1914,7 @@ group_skip(const char *name, const char *why)
     puts_(" skipped: ");
     puts_(why);
     puts_("\n");
+    ref_check(name, 1);
 }
 
 #include "groups.inc"

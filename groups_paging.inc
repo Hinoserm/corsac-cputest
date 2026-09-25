@@ -530,7 +530,8 @@ group_pg_smc_alias(void)
         memcpy(v.target, sigs[k].b, sigs[k].len);
         v.target_len = sigs[k].len;
         v.arg2       = k;
-        v.fx_arg     = k == 0;
+        v.fx_arg     = 1;
+        v.canon      = k ? canon_smc_byte : 0; /* without the jump: old or new byte */
         run_plain(&v, 2);
     }
     pg_end(name);

@@ -189,6 +189,20 @@ of the screen turns red, and COM1 gets everything about that test:
 - each run's complete result;
 - a list of what differs from run 1, field by field and byte by byte.
 
+A few tests have more than one right answer on a real CPU, and a real CPU
+gives different ones from run to run: code that overwrites the next
+instruction without a jump may run it as it was or as it became. Such a
+test lists every allowed outcome and folds each into one canonical result
+before the runs are compared, so they agree whenever the CPU gave any of
+them. An outcome outside the list still stops the test.
+
+The same happens when a group's results differ from what a real CPU of
+the same model gave. `refs.inc` holds those results, one line per group,
+made by `refs.py` from the real CPU's serial log. Each group line carries
+`def=`, a fingerprint of the group's own definition; a reference is only
+compared while that fingerprint matches, so changing a group makes its old
+reference stale (it says so and goes on), never wrong.
+
 A fault inside the harness itself (not in a test) stops it the same way,
 with the vector, error code, EIP, CR2, the registers and what was running,
 instead of crashing on.
@@ -279,6 +293,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |
+| `refs.inc`   | real CPUs' results per group (made by `refs.py`)            |
+| `refs.py`    | makes `refs.inc` from serial logs                           |
 
 ## License
 
