@@ -612,6 +612,17 @@ group_cmpxchg(void)
             run_keep(&v, 3);
         }
     }
+    /* XADD r8, r8 with every pair of byte registers (the same one twice,
+       high halves on both sides): a recompiler's register allocation for
+       byte halves is where it has gone wrong. The flags are an ADD's. */
+    struct variant x = { .group = name };
+    for (int m = 0xc0; m <= 0xff; m++) {
+        x.target[0]  = 0x0f;
+        x.target[1]  = 0xc0;
+        x.target[2]  = m;
+        x.target_len = 3;
+        run_plain(&x, 1);
+    }
     group_end(name);
 }
 
@@ -1554,6 +1565,15 @@ group_misc(void)
             run_flags(&v, 1);
         else
             run_plain(&v, 2);
+    }
+    /* XCHG r8, r8 with every pair of byte registers, high halves too (86h
+       C0-FF): 86Box's recompiler once swapped the wrong halves. */
+    struct variant x = { .group = name };
+    for (int m = 0xc0; m <= 0xff; m++) {
+        x.target[0]  = 0x86;
+        x.target[1]  = m;
+        x.target_len = 2;
+        run_plain(&x, 1);
     }
     misc_xlat(name);
     group_end(name);
