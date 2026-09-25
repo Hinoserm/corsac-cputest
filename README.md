@@ -111,6 +111,7 @@ between versions until the group itself changes.
 | 212 | `r3.priv` | every privileged instruction at CPL 3: #GP(0) |
 | 213 | `r3.io` | port 80h by OUT, OUT DX, OUTSB with the TSS I/O bitmap allowing and denying, at IOPL 0 and 3; CLI by IOPL |
 | 214 | `r3.popf` | POPF at CPL 3: IOPL never changes, IF only at IOPL 3, AC always |
+| 215 | `r3.ac` | the alignment check (CR0.AM, EFLAGS.AC) at CPL 3: #AC(0) for misaligned words, dwords and stack pushes |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
