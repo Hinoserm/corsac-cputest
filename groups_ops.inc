@@ -848,6 +848,48 @@ string_segs(const char *name)
     }
 }
 
+/* INS and OUTS through a port that reads back what is written: the
+   master PIC's mask (21h, all masked again after each run, as the harness
+   keeps it). Bytes only: a word or dword there would reach 22h/23h, the
+   Cyrix configuration registers and the IMCR. OUTSB with the port in DX
+   and garbage above it in EDX; OUTSB with 16-bit addressing (SI, the low
+   buffer); INSB into the buffer above 64 KB; INSB with an FS override,
+   which INS ignores (FS null). AH ends as the mask read back. */
+static void
+fix_strio(const struct variant *v)
+{
+    g_in.esi = (uint32_t) g_buf;
+    g_in.edi = (uint32_t) g_buf + 32;
+    g_in.flags &= ~0x400u;
+}
+
+#define PIC_READBACK 0xe4, 0x21, 0x88, 0xc4, 0xb0, 0xff, 0xe6, 0x21 /* in al, 21h; mov ah, al; mask all */
+
+static void
+string_io(const char *name)
+{
+    static const struct {
+        uint8_t len, b[28];
+    } seqs[] = {
+        { SEQ(0xba, 0x21, 0x00, 0xcd, 0xab, 0xc6, 0x06, 0x5a, 0x6e, PIC_READBACK) },   /* outsb, EDX=ABCD0021h */
+        { SEQ(0xbe, 0x00, 0x90, 0x34, 0x12, 0xc6, 0x05, 0x00, 0x90, 0x00, 0x00, 0xa5,
+              0x66, 0xba, 0x21, 0x00, 0x67, 0x6e, PIC_READBACK) },                        /* a16 outsb from SI 9000h */
+        { SEQ(0x66, 0xba, 0x21, 0x00, 0x6c) },                                             /* insb into [edi] */
+        { SEQ(0x66, 0xba, 0x21, 0x00, 0x66, 0xb8, 0x00, 0x00, 0x8e, 0xe0, 0x64, 0x6c) },   /* fs: insb */
+    };
+    struct variant v = { .group = name, .faults_ok = 1, .fix_input = fix_strio,
+                         .norm = (1 << R_ESI) | (1 << R_EDI) };
+#ifdef HOSTTEST
+    return; /* no ports in a Linux process */
+#endif
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.no_ref     = i == 1; /* the low buffer: not in the host build */
+        run_keep(&v, 1);
+    }
+}
+
 static void
 group_string(void)
 {
@@ -898,6 +940,7 @@ group_string(void)
     string_overlap(name);
     string_long(name);
     string_segs(name);
+    string_io(name);
     group_end(name);
 }
 
