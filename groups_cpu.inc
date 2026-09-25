@@ -78,6 +78,25 @@ group_cpuid(void)
         v.target_len = 9;
         run_plain(&v, 1);
     }
+    /* The local APIC's version register, where CPUID says there is an
+       APIC: through APIC_BASE (1Bh) if it's enabled, 0 if not. */
+    if ((g_cpu.features & CPUID_APIC) && (g_cpu.features & CPUID_MSR)) {
+        static const uint8_t apic[] = {
+            0xb9, 0x1b, 0x00, 0x00, 0x00, /* mov ecx, 1bh */
+            0x0f, 0x32,                   /* rdmsr */
+            0x0f, 0xba, 0xe0, 0x0b,       /* bt eax, 11: enabled */
+            0x73, 0x0a,                   /* jnc 1f */
+            0x25, 0x00, 0xf0, 0xff, 0xff, /* and eax, 0fffff000h */
+            0x8b, 0x40, 0x30,             /* mov eax, [eax+30h] */
+            0xeb, 0x02,                   /* jmp 2f */
+            0x31, 0xc0,                   /* 1: xor eax, eax */
+            0x31, 0xd2,                   /* 2: xor edx, edx */
+            0x31, 0xc9,                   /* xor ecx, ecx */
+        };
+        memcpy(v.target, apic, sizeof(apic));
+        v.target_len = sizeof(apic);
+        run_plain(&v, 1);
+    }
     group_end(name);
 }
 
@@ -93,6 +112,10 @@ group_msr_map(void)
         0x82, 0x83, 0x85, 0x86, 0x87, 0x88, 0x89,                                            /* AMD K5 */
         0x107, 0x108, 0x109, 0x10a, 0x147,                                                   /* IDT WinChip */
         0x179, 0x17b, 0x186, 0x200, 0x250, 0x2ff,                                            /* P6 MCA, MTRRs */
+        0x88, 0x116, 0x11e, 0x174, 0x175, 0x176, 0x17a, 0x187, 0xc2, 0x1d9, 0x1db, 0x1dc,    /* P6: L2, SYSENTER, counters, LBR */
+        0x201, 0x20f, 0x258, 0x259, 0x268, 0x26f, 0x277, 0x400, 0x401, 0x402, 0x403,       /* P6: MTRRs, PAT, MC bank 0 */
+        0x110, 0x120, 0x1107, 0x1108,                                                        /* WinChip MCR, Cyrix III FCR */
+        0x40000010, 0x80000010,                                                              /* the TSC with high ECX bits */
         0xc0000080, 0xc0000081, 0xc0000082, 0xc0000083, 0xc0000084, 0xc0000085, 0xc0000086, 0xc0000087, /* AMD K6 */
         0xc0010000, 0x40000000, 0xffffffff,
     };
@@ -144,6 +167,62 @@ tsc_rdmsr(const char *name)
     run_plain(&v, 2);
 }
 
+/* On a P6 (Intel family 6): WRMSR to the read-only MTRRcap (FEh) and
+   MCG_CAP (179h) and to the LBR MSR 1DBh is #GP, and so is a variable
+   MTRR with a reserved memory type (2); PerfCtr0 (C1h) takes the low 32
+   bits of what is written and sign-extends them to 40. MTRR 0, PerfCtr0
+   and EvtSel0 (stopped, so the counter holds still) are saved before each
+   run and put back after. */
+static uint32_t g_msrw_saved[6] RING_UNUSED;
+
+static void
+msrw_before(const struct variant *v)
+{
+#ifndef HOSTTEST
+    static const uint32_t msrs[3] = { 0x200, 0xc1, 0x186 };
+    for (int i = 0; i < 3; i++)
+        __asm__ volatile("rdmsr" : "=a"(g_msrw_saved[2 * i]), "=d"(g_msrw_saved[2 * i + 1]) : "c"(msrs[i]));
+    wrmsr_(0x186, 0, 0);
+#endif
+}
+
+static void
+msrw_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    static const uint32_t msrs[3] = { 0x200, 0xc1, 0x186 };
+    for (int i = 0; i < 3; i++)
+        wrmsr_(msrs[i], g_msrw_saved[2 * i], g_msrw_saved[2 * i + 1]);
+#endif
+}
+
+static void
+msr_write_p6(const char *name)
+{
+    static const struct {
+        uint8_t len, b[24];
+    } seqs[] = {
+        { SEQ(0xb9, 0xfe, 0x00, 0x00, 0x00, 0x31, 0xc0, 0x31, 0xd2, 0x0f, 0x30) },       /* MTRRcap */
+        { SEQ(0xb9, 0x79, 0x01, 0x00, 0x00, 0x31, 0xc0, 0x31, 0xd2, 0x0f, 0x30) },       /* MCG_CAP */
+        { SEQ(0xb9, 0xdb, 0x01, 0x00, 0x00, 0x31, 0xc0, 0x31, 0xd2, 0x0f, 0x30) },       /* LastBranchFromIP */
+        { SEQ(0xb9, 0x00, 0x02, 0x00, 0x00, 0xb8, 0x02, 0x00, 0x00, 0x00, 0x31, 0xd2,
+              0x0f, 0x30) },                                                             /* MTRRphysBase0, type 2 */
+        { SEQ(0xb9, 0xc1, 0x00, 0x00, 0x00, 0xb8, 0x00, 0x00, 0x00, 0x80, 0x31, 0xd2,
+              0x0f, 0x30, 0x0f, 0x32) },                                                 /* PerfCtr0 = 80000000h */
+        { SEQ(0xb9, 0xc1, 0x00, 0x00, 0x00, 0xb8, 0x34, 0x12, 0x00, 0x00, 0xba, 0xab,
+              0x00, 0x00, 0x00, 0x0f, 0x30, 0x0f, 0x32) },                               /* EDX ignored */
+    };
+    struct variant v = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1,
+                         .before_run = msrw_before, .after_run = msrw_after };
+    if (!is_vendor("GenuineIntel") || ((g_cpu.signature >> 8) & 0xf) != 6)
+        return;
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        run_plain(&v, 1);
+    }
+}
+
 /* WRMSR to the TSC with the upper half set, then RDTSC: the upper half
    reads back as written, or zero on models that write only 32 bits, and
    the lower half is a little past what was written. EAX becomes that
@@ -162,7 +241,7 @@ group_tsc_write(void)
         0x0f, 0x92, 0xc0,             /* setb al */
         0x0f, 0xb6, 0xc0,             /* movzx eax, al */
     };
-    const char    *name = "tsc.write";
+    const char    *name = "msr.write";
     struct variant v    = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_arg3 };
     if (!(g_cpu.features & CPUID_MSR) || !(g_cpu.features & CPUID_TSC)) {
         group_skip(name, "no MSRs or TSC");
@@ -173,6 +252,7 @@ group_tsc_write(void)
     v.target_len = sizeof(seq);
     run_plain(&v, 1);
     tsc_rdmsr(name);
+    msr_write_p6(name);
     group_end(name);
 }
 

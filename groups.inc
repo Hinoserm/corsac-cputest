@@ -70,6 +70,7 @@ dm_fxarg(const struct variant *v, const struct kin *in, struct kout *d, uint16_t
 #define MSR_EFER    0xc0000080u
 #define MSR_STAR    0xc0000081u
 #define CPUID_SEP   (1u << 11)
+#define CPUID_APIC  (1u << 9)
 #define CR4_PVI     (1u << 1)
 #define CR4_PGE     (1u << 7)
 #define CR4_PCE     (1u << 8)
