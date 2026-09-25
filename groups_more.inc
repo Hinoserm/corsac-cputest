@@ -353,6 +353,43 @@ segments_sreg(const char *name)
     }
 }
 
+/* Far pointers at the end of 16-bit addressing: through FS as the 64 KB
+   data segment, a 6-byte pointer at FFFEh is #GP, a 4-byte one at FFFCh
+   loads and one at FFFEh is #GP; through flat DS, the 4-byte one at FFFEh
+   is read across 10000h, not wrapped to 0 (a 386 and later don't wrap).
+   LFS only, so a model that wraps can only change FS (put back after
+   each run). The pointers are stored first: 0010h:1234h at FFFCh; for
+   the flat case offset 5678h at FFFEh and selector 0010h at 10000h. */
+static void
+segments_wrap(const char *name)
+{
+    static const struct {
+        uint8_t len, b[40];
+    } seqs[] = {
+        { SEQ(0xc7, 0x05, 0xfc, 0xff, 0x00, 0x00, 0x34, 0x12, 0x10, 0x00,   /* [FFFCh] = 0010h:1234h */
+              0x66, 0xb8, 0x20, 0x00, 0x8e, 0xe0, 0xbb, 0xfe, 0xff, 0x00, 0x00, /* fs = 20h; ebx = FFFEh */
+              0x64, 0x67, 0x0f, 0xb4, 0x37) },                                /* lfs esi, fs:[bx]: #GP */
+        { SEQ(0xc7, 0x05, 0xfc, 0xff, 0x00, 0x00, 0x34, 0x12, 0x10, 0x00,
+              0x66, 0xb8, 0x20, 0x00, 0x8e, 0xe0, 0xbb, 0xfc, 0xff, 0x00, 0x00,
+              0x66, 0x64, 0x67, 0x0f, 0xb4, 0x37, 0x8c, 0xe7) },              /* lfs si, fs:[bx] at FFFCh; mov edi, fs */
+        { SEQ(0x66, 0xb8, 0x20, 0x00, 0x8e, 0xe0, 0xbb, 0xfe, 0xff, 0x00, 0x00,
+              0x66, 0x64, 0x67, 0x0f, 0xb4, 0x37) },                          /* at FFFEh: #GP */
+        { SEQ(0xc7, 0x05, 0xfc, 0xff, 0x00, 0x00, 0x00, 0x00, 0x78, 0x56,   /* [FFFEh] = 5678h */
+              0xc7, 0x05, 0x00, 0x00, 0x01, 0x00, 0x10, 0x00, 0x00, 0x00,   /* [10000h] = 0010h */
+              0xbb, 0xfe, 0xff, 0x00, 0x00, 0x66, 0x67, 0x0f, 0xb4, 0x37,     /* lfs si, [bx] (flat DS) */
+              0x8c, 0xe7) },                                                  /* mov edi, fs */
+    };
+    struct variant v = { .group = name, .faults_ok = 1 };
+#ifdef HOSTTEST
+    return; /* segment loads (host build) */
+#endif
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        run_plain(&v, 1);
+    }
+}
+
 static void
 group_segments(void)
 {
@@ -406,5 +443,6 @@ group_segments(void)
     }
     segments_lds(name);
     segments_sreg(name);
+    segments_wrap(name);
     group_end(name);
 }
