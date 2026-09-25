@@ -85,6 +85,12 @@ static const struct loop_def {
     { "loop.bts32", LK_PLAIN, 32, 0x001, SEQ(0x0f, 0xab, 0xd8) },
     { "loop.btr32", LK_PLAIN, 32, 0x001, SEQ(0x0f, 0xb3, 0xd8) },
     { "loop.btc32", LK_PLAIN, 32, 0x001, SEQ(0x0f, 0xbb, 0xd8) },
+    { "loop.xadd8", LK_PLAIN, 8, 0x8d5, SEQ(0x0f, 0xc0, 0xd8) },
+    { "loop.cmpxchg8", LK_CMPXCHG, 8, 0x8d5, SEQ(0x0f, 0xb0, 0xcb) },
+    { "loop.xadd16", LK_PLAIN, 16, 0x8d5, SEQ(0x66, 0x0f, 0xc1, 0xd8) },
+    { "loop.cmpxchg16", LK_CMPXCHG, 16, 0x8d5, SEQ(0x66, 0x0f, 0xb1, 0xcb) },
+    { "loop.xadd32", LK_PLAIN, 32, 0x8d5, SEQ(0x0f, 0xc1, 0xd8) },
+    { "loop.cmpxchg32", LK_CMPXCHG, 32, 0x8d5, SEQ(0x0f, 0xb1, 0xcb) },
 };
 
 #define LOOP_N 4096
@@ -259,4 +265,5 @@ GA(group_loop, 42), GA(group_loop, 43), GA(group_loop, 44), GA(group_loop, 45), 
 GA(group_loop, 48), GA(group_loop, 49), GA(group_loop, 50), GA(group_loop, 51), GA(group_loop, 52), GA(group_loop, 53), \
 GA(group_loop, 54), GA(group_loop, 55), GA(group_loop, 56), GA(group_loop, 57), GA(group_loop, 58), GA(group_loop, 59), \
 GA(group_loop, 60), GA(group_loop, 61), GA(group_loop, 62), GA(group_loop, 63), GA(group_loop, 64), GA(group_loop, 65), \
-GA(group_loop, 66),
+GA(group_loop, 66), GA(group_loop, 67), GA(group_loop, 68), GA(group_loop, 69), GA(group_loop, 70), GA(group_loop, 71), \
+GA(group_loop, 72),
