@@ -389,17 +389,28 @@ group_bt(void)
 #include "groups_exhaust.inc"
 #include "groups_mem.inc"
 #include "groups_code16.inc"
+#include "groups_loop.inc"
 
-static void (*const groups[])(void) = {
-    group_alu, group_setcc, group_lahf_sahf, group_bswap, group_movx, group_bt,
-    /* Everything below was added after the first six were recorded. */
-    group_imul, group_muldiv, group_shift, group_shd, group_bs, group_cmpxchg,
-    group_bcd, group_string, group_popf, group_stack, group_far, group_int,
-    group_bound_arpl, group_misc, group_mmx, group_mmx_x87, group_3dnow,
-    group_cmov, group_rdtsc, group_nop_p6, group_smc,
-    group_segments, group_exhaust8, group_lea,
-    group_alu_mem, group_unary_mem, group_jcc_loop,
-    group_mov_forms, group_prefixes, group_code16,
+/* The groups in order. A group is a function, or one of a family of
+   parametrised ones (the sampled loops) with its index. */
+struct group_def {
+    void (*fn)(void);
+    void (*fn_arg)(unsigned);
+    unsigned arg;
+};
+#define G(f)       { f, 0, 0 }
+#define GA(f, a)   { 0, f, a }
+
+static const struct group_def groups[] = {
+    G(group_alu), G(group_setcc), G(group_lahf_sahf), G(group_bswap), G(group_movx), G(group_bt),
+    G(group_imul), G(group_muldiv), G(group_shift), G(group_shd), G(group_bs), G(group_cmpxchg),
+    G(group_bcd), G(group_string), G(group_popf), G(group_stack), G(group_far), G(group_int),
+    G(group_bound_arpl), G(group_misc), G(group_mmx), G(group_mmx_x87), G(group_3dnow),
+    G(group_cmov), G(group_rdtsc), G(group_nop_p6), G(group_smc),
+    G(group_segments), G(group_exhaust8), G(group_lea),
+    G(group_alu_mem), G(group_unary_mem), G(group_jcc_loop),
+    G(group_mov_forms), G(group_prefixes), G(group_code16),
+    LOOP_GROUPS
 };
 
 /* Each group twice: counted first, so the status line knows how many are
@@ -410,9 +421,12 @@ run_groups(void)
     g_group_count = sizeof(groups) / sizeof(groups[0]);
     for (int i = 0; i < g_group_count; i++) {
         g_group_no = i + 1;
-        g_counting = 1;
-        groups[i]();
+        for (g_counting = 1; g_counting >= 0; g_counting--) {
+            if (groups[i].fn)
+                groups[i].fn();
+            else
+                groups[i].fn_arg(groups[i].arg);
+        }
         g_counting = 0;
-        groups[i]();
     }
 }

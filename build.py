@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "build")
 
 CFLAGS = [
-    "-m32", "-march=i386", "-O2", "-std=gnu11",
+    "-m32", "-march=i386", "-Os", "-std=gnu11",
     "-ffreestanding", "-fno-pic", "-fno-pie", "-fno-stack-protector",
     "-fno-asynchronous-unwind-tables", "-fno-builtin", "-nostdlib",
     "-Wall", "-Wextra", "-Wno-unused-parameter",
@@ -49,7 +49,8 @@ def main():
     run(["objcopy", "-O", "binary", "payload.elf", "payload.bin"])
 
     payload = os.path.getsize(os.path.join(OUT, "payload.bin"))
-    for size in (32768, 65536):
+    # 32 or 64 KB fits an ISA ROM card; the disk image takes up to 127 KB.
+    for size in (32768, 65536, 130560):
         if payload + 512 <= size:
             break
     else:

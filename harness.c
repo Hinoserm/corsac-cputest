@@ -897,7 +897,7 @@ run_variant(const struct variant *v)
     in = g_in;
 
     int         big  = v->emit || v->stack;
-    uint32_t    len  = v->mmx || v->code16 ? 384 : big ? 256 : 160;
+    uint32_t    len  = v->emit ? 512 : v->mmx || v->code16 ? 384 : big ? 256 : 160;
     if (v->target_len > 16) /* room for a long target on top */
         len += v->target_len;
     uint8_t    *slot = arena_alloc(len);
@@ -1092,6 +1092,23 @@ progress_due(void)
 #endif
 }
 
+#ifndef HOSTTEST
+/* A number into the status line. */
+static int
+line_num(char *line, int n, uint32_t v)
+{
+    char d[12];
+    int  k = 0;
+    do {
+        d[k++] = '0' + v % 10;
+        v /= 10;
+    } while (v);
+    while (k)
+        line[n++] = d[--k];
+    return n;
+}
+#endif
+
 /* The top line of the screen, redrawn in place every 16 tests; COM1 gets a
    PROGRESS line every 3 seconds. */
 static void
@@ -1113,13 +1130,9 @@ status(void)
     }
     for (p = "  group "; *p; p++)
         line[n++] = *p;
-    if (g_group_no >= 10)
-        line[n++] = '0' + g_group_no / 10;
-    line[n++] = '0' + g_group_no % 10;
+    n = line_num(line, n, g_group_no);
     line[n++] = '/';
-    if (g_group_count >= 10)
-        line[n++] = '0' + g_group_count / 10;
-    line[n++] = '0' + g_group_count % 10;
+    n = line_num(line, n, g_group_count);
     line[n++] = ' ';
     for (p = g_group_name; *p && n < 40; p++)
         line[n++] = *p;
