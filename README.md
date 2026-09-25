@@ -127,6 +127,7 @@ between versions until the group itself changes.
 | 228 | `r1.int` | software interrupts from ring 1: the DPL-1 gate is allowed, DPL 0 not |
 | 229 | `r1.ac` | CR0.AM and EFLAGS.AC at CPL 1: never #AC |
 | 230 | `r1.pf` | paging at CPL 1: supervisor access to every page, read-only pages writable with WP clear |
+| 231 | `r1.pf.wp` | the same with CR0.WP: ring 1 writes to read-only pages fault |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
