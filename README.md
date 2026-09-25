@@ -167,6 +167,7 @@ between versions until the group itself changes.
 | 268 | `cr23.rw` | CR2 and CR3 written and read back (CR3's low bits raw) |
 | 269 | `tsc.msr` | RDMSR of the TSC agrees with RDTSC |
 | 270 | `desc.accessed` | segment loads set a descriptor's accessed bit; LAR, LSL, VERR and VERW don't (the GDT read back, CPL 0 and 3) |
+| 271 | `ldt.load` | LLDT of the LDT, null, a TSS, data, a TI=1 selector, from memory; SLDT; TI=1 loads with no LDT (#GP) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
