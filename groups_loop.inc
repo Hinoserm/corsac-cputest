@@ -162,6 +162,11 @@ static const struct loop_def {
     { "loop.pfrcpit2", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0xb6) },
     { "loop.pmulhrw", LK_3DN, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0xb7) },
     { "loop.pavgusb", LK_3DN, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0xbf) },
+    { "loop.pi2fw", LK_3DNX, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0x0c) },
+    { "loop.pf2iw", LK_3DNXF, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0x1c) },
+    { "loop.pfnacc", LK_3DNXF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0x8a) },
+    { "loop.pfpnacc", LK_3DNXF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0x8e) },
+    { "loop.pswapd", LK_3DNX, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0xbb) },
 };
 
 #define LOOP_N 4096
@@ -454,4 +459,5 @@ GA(group_loop, 108), GA(group_loop, 109), GA(group_loop, 110), GA(group_loop, 11
 GA(group_loop, 114), GA(group_loop, 115), GA(group_loop, 116), GA(group_loop, 117), GA(group_loop, 118), GA(group_loop, 119), \
 GA(group_loop, 120), GA(group_loop, 121), GA(group_loop, 122), GA(group_loop, 123), GA(group_loop, 124), GA(group_loop, 125), \
 GA(group_loop, 126), GA(group_loop, 127), GA(group_loop, 128), GA(group_loop, 129), GA(group_loop, 130), GA(group_loop, 131), \
-GA(group_loop, 132), GA(group_loop, 133), GA(group_loop, 134), GA(group_loop, 135), GA(group_loop, 136),
+GA(group_loop, 132), GA(group_loop, 133), GA(group_loop, 134), GA(group_loop, 135), GA(group_loop, 136), GA(group_loop, 137), \
+GA(group_loop, 138), GA(group_loop, 139), GA(group_loop, 140), GA(group_loop, 141),
