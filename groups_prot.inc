@@ -315,3 +315,39 @@ group_string_overlap(void)
     }
     group_end(name);
 }
+
+/* Long REP runs through the sandbox, across its page boundaries: STOSD,
+   MOVSD, unaligned STOSB, MOVSB backwards, CMPSD over equal memory (it
+   runs out), SCASB for a byte that isn't there. arg2: the case. */
+static void
+fix_long(const struct variant *v)
+{
+    uint32_t s = (uint32_t) SANDBOX;
+    g_in.flags &= ~0x400u;
+    switch (v->arg2) {
+        case 0: g_in.edi = s + 0x0400; g_in.ecx = 1000; break;
+        case 1: g_in.esi = s + 0x0100; g_in.edi = s + 0x2100; g_in.ecx = 1024; break;
+        case 2: g_in.edi = s + 0x0401; g_in.ecx = 3001; break;
+        case 3: g_in.flags |= 0x400u; g_in.esi = s + 0x1f00; g_in.edi = s + 0x3f00; g_in.ecx = 2500; break;
+        case 4: g_in.esi = s + 0x0000; g_in.edi = s + 0x2400; g_in.ecx = 1000; break;
+        default: g_in.edi = s + 0x2400; g_in.ecx = 3000; g_in.eax &= ~0xffu; break;
+    }
+}
+
+static void
+group_string_long(void)
+{
+    static const struct {
+        uint8_t len, b[2];
+    } seqs[] = { { SEQ(0xf3, 0xab) }, { SEQ(0xf3, 0xa5) }, { SEQ(0xf3, 0xaa) }, { SEQ(0xf3, 0xa4) }, { SEQ(0xf3, 0xa7) }, { SEQ(0xf2, 0xae) } };
+    const char    *name = "string.long";
+    struct variant v    = { .group = name, .fix_input = fix_long, .norm = (1 << R_ESI) | (1 << R_EDI) };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.arg2       = i;
+        run_keep(&v, 1);
+    }
+    group_end(name);
+}

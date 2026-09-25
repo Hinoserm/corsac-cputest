@@ -178,6 +178,7 @@ between versions until the group itself changes.
 | 279 | `lds.forms` | LDS LES LFS LGS LSS with 32- and 16-bit offsets and a data, null, code, 64 KB and out-of-GDT selector |
 | 280 | `stack16` | a 16-bit stack segment: PUSH/POP, CALL, ENTER, PUSHAD, PUSHFD move SP only, the upper half of ESP kept; SP wrapping at 0 (#SS) |
 | 281 | `string.overlap` | REP MOVSB/W/D over overlapping source and destination, both directions, and a count of 0 |
+| 282 | `string.long` | long REP STOS, MOVS, CMPS and SCAS across the sandbox's pages, unaligned and backwards |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
