@@ -82,6 +82,7 @@ between versions until the group itself changes.
 | 26 | `nop.p6`      | multi-byte NOP and the reserved NOPs 0F 19-1E: NOPs on P6, #UD before; its CRCs differ by family on purpose |
 | 27 | `smc`         | self-modifying code: patched immediates and opcodes, and a loop that repatches its own block; without a jump only in `crc_raw` (a 486 may run stale prefetched bytes) |
 | 28 | `segments`    | FS/GS loads of good, null, 16-bit, RPL-3, out-of-GDT and LDT selectors (#GP), limits, LFS/LGS, MOV from Sreg, LAR LSL VERR VERW |
+| 29 | `exhaust8`    | every input of the 8-bit flag math, walked by a loop inside the test: ADD..CMP × AL × BL × CF, INC DEC NEG NOT, shifts and rotates × counts 0-31, DAA DAS AAA AAS × AF × CF, MUL IMUL, AAM AAD, SAHF |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -135,7 +136,10 @@ DONE   pass=N tests= mismatches= arena_wraps= PASS|FAIL
 - `crc_defined`: only what the architecture defines. Undefined flags (per
   producer and per instruction) are masked, and so are undefined register
   results. Compare this one between different CPU models, emulated or real.
-- `crc_raw`: the same results with nothing masked. Compare this one only
+  In `exhaust8` the loop folds only the defined flags into EBP, which goes
+  into this CRC.
+- `crc_raw`: the same results with nothing masked (in `exhaust8`, EDI's
+  checksum of all the flags). Compare this one only
   against the **same** CPU model; it catches undefined-flag behaviour that
   real software sometimes depends on.
 
@@ -188,7 +192,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_ops.inc` | groups 7-20                                               |
 | `groups_mmx.inc` | groups 21-23: MMX and 3DNow!                              |
 | `groups_p6.inc` | groups 24-26: Pentium Pro and later                        |
-| `groups_more.inc` | groups 27 on                                             |
+| `groups_more.inc` | groups 27-28                                             |
+| `groups_exhaust.inc` | group 29: exhaustive 8-bit flag math                  |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |
