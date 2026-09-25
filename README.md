@@ -118,6 +118,7 @@ between versions until the group itself changes.
 | 219 | `r3.tsd` | CR4.TSD: RDTSC faults outside ring 0, whatever IOPL; RDPMC without CR4.PCE |
 | 220 | `r3.pf` | paging at CPL 3: supervisor pages, read-only pages, missing pages; U/S in the error code |
 | 221 | `r1.basic` | code at CPL 1 (CORSAC's sub-kernels): the same as r3.basic |
+| 222 | `r1.priv` | every privileged instruction at CPL 1: #GP(0) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
