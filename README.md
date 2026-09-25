@@ -134,11 +134,13 @@ in every group.
 
 Groups 7 on have no reference values yet.
 
-Two interpreter bugs in 86Box turned up this way, both in upstream master:
+Three interpreter bugs in 86Box turned up this way, all in upstream master:
 
 - **BT, BTS, BTR and BTC with a memory operand and a register bit offset**
   treated the offset as unsigned, so a negative offset addressed the wrong
   byte.
+- **BT, BTS, BTR and BTC with an immediate bit offset** (`0F BA`) didn't
+  take the offset modulo the operand size.
 - **ADC** computed AF from the whole second operand instead of its low
   nibble.
 
