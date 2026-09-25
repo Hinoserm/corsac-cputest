@@ -16,13 +16,21 @@
    - 0F CC, BSWAP ESP: it takes no ModRM, so it scrambles the stack the
      test returns on (bswap covers the other registers).
    And in the memory form only: the bit-string instructions with a
-   register offset (they reach anywhere in memory) and LSS (a random SS). */
+   register offset (they reach anywhere in memory) and LSS (a random SS).
+   Under a hypervisor, 0F C7 in the register form: ModRM F8 is RDSEED on
+   the host CPU, a new random number each run. And 0F F7 in the register
+   form: MASKMOVQ on a CPU with SSE, a store to DS:[EDI] with EDI random
+   (its memory form is #UD everywhere, and stays). */
 static int
 opmap_skip(int op, int mem)
 {
     if (op == 0x07 || op == 0x08 || (op >= 0x22 && op <= 0x27) || (op >= 0x30 && op <= 0x33) || (op >= 0x80 && op <= 0x8f))
         return 1;
     if (op == 0xa0 || op == 0xa1 || op == 0xa8 || op == 0xa9 || op == 0x38 || op == 0xcc)
+        return 1;
+    if (!mem && op == 0xc7 && under_hypervisor())
+        return 1;
+    if (!mem && op == 0xf7)
         return 1;
     return mem && (op == 0xa3 || op == 0xab || op == 0xb3 || op == 0xbb || op == 0xb2);
 }

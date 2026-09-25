@@ -164,12 +164,8 @@ smc_device(const char *name)
 #ifdef HOSTTEST
     return; /* no VGA memory in a Linux process */
 #endif
-    if (g_cpu.has_cpuid) { /* KVM can't fetch code from an emulated device: not under a hypervisor */
-        uint32_t ea, eb, ec, ed;
-        cpuid(1, &ea, &eb, &ec, &ed);
-        if (ec & (1u << 31))
-            return;
-    }
+    if (under_hypervisor()) /* KVM can't fetch code from an emulated device */
+        return;
     memcpy(v.target, b, sizeof(b));
     v.target_len = sizeof(b);
     run_plain(&v, 1);

@@ -109,6 +109,19 @@ is_vendor(const char *v)
     return g_cpu.has_cpuid && !memcmp_(g_cpu.vendor, v, 12);
 }
 
+/* Running under a hypervisor (CPUID.1 ECX bit 31): QEMU/KVM, where the
+   host CPU shows through in places (RDRAND/RDSEED run, code can't be
+   fetched from emulated devices). Real CPUs of this era and 86Box: no. */
+static __attribute__((unused)) int
+under_hypervisor(void)
+{
+    uint32_t a, b, c, d;
+    if (!g_cpu.has_cpuid)
+        return 0;
+    cpuid(1, &a, &b, &c, &d);
+    return (c >> 31) & 1;
+}
+
 static void
 run_inputs(struct variant *v, int inputs)
 {
@@ -578,6 +591,7 @@ static const struct group_def groups[] = {
     G(group_smp_start),
     G(group_smp_ipi),
     G(group_smp_lock),
+    G(group_ioapic),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

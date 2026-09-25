@@ -825,3 +825,129 @@ group_smp_lock(void)
     group_end(name);
 #endif
 }
+
+/* ---- the I/O APIC ------------------------------------------------------------------ */
+
+static volatile uint32_t *g_ioapic;
+
+static uint32_t
+ioapic_rd(uint32_t index)
+{
+    g_ioapic[0] = index;
+    return g_ioapic[4];
+}
+
+static void
+ioapic_wr(uint32_t index, uint32_t val)
+{
+    g_ioapic[0] = index;
+    g_ioapic[4] = val;
+}
+
+#ifndef HOSTTEST
+static uint8_t
+cmos_rw(uint8_t reg, int write, uint8_t val)
+{
+    outb(0x70, 0x80 | reg); /* NMI stays off */
+    if (write)
+        outb(0x71, val);
+    return inb(0x71);
+}
+#endif
+
+/* The first I/O APIC the tables list, from the boot processor:
+   1. its ID, version (and the highest redirection entry) and arbitration
+      ID; every redirection entry written with the mask bit kept set, all
+      ones and then zeros, and read back (the writable bits; delivery
+      status and remote IRR read-only); the entries put back after;
+   2. the RTC's periodic interrupt (IRQ 8, INTIN 8: the ISA identity the
+      MP spec's default configurations use) routed as fixed, edge, vector
+      68h to this processor's APIC ID, the 8259 masked throughout: it
+      arrives (and keeps arriving while unmasked); masked, it doesn't.
+   The RTC's registers A and B and the entry are put back after. */
+static void
+group_ioapic(void)
+{
+    const char *name = "ioapic";
+#ifdef HOSTTEST
+    group_skip(name, "the I/O APIC (host build)");
+#else
+    struct variant v = { .group = name, .no_ref = 1 };
+    if (!lapic_find() || !mp_usable() || !g_mp.n_ioapics) {
+        group_skip(name, "no local APIC, or no I/O APIC in the tables");
+        return;
+    }
+    g_ioapic = (volatile uint32_t *) g_mp.io[0].addr;
+    group_begin(name);
+    uint32_t f[2][5] = { { 0 } };
+    if (!g_counting) {
+        uint32_t ver = ioapic_rd(1), max = (ver >> 16) & 0xff;
+        f[0][0] = ioapic_rd(0) & 0x0f000000;
+        f[0][1] = ver & 0x00ff00ff;
+        f[0][2] = ioapic_rd(2) & 0x0f000000;
+        if (ver == 0xffffffffu || max > 63)
+            max = 0; /* not decoded: nothing more */
+        uint32_t ones = 0xffffffffu, zeros = 0;
+        for (uint32_t i = 0; i <= max && ver != 0xffffffffu; i++) {
+            uint32_t lo = ioapic_rd(0x10 + 2 * i), hi = ioapic_rd(0x11 + 2 * i);
+            ioapic_wr(0x10 + 2 * i, 0xffffffffu); /* bit 16 set: masked */
+            ioapic_wr(0x11 + 2 * i, 0xffffffffu);
+            ones &= ioapic_rd(0x10 + 2 * i) ^ (ioapic_rd(0x11 + 2 * i) & 0xff000000);
+            ioapic_wr(0x10 + 2 * i, 0x00010000);
+            ioapic_wr(0x11 + 2 * i, 0);
+            zeros |= ioapic_rd(0x10 + 2 * i) | ioapic_rd(0x11 + 2 * i);
+            ioapic_wr(0x11 + 2 * i, hi);
+            ioapic_wr(0x10 + 2 * i, lo);
+        }
+        f[0][3] = ones;
+        f[0][4] = zeros;
+
+        if (max >= 8 && ver != 0xffffffffu) {
+            uint32_t own = lapic_rd(LAPIC_ID) >> 24;
+            uint32_t lo  = ioapic_rd(0x10 + 16), hi = ioapic_rd(0x11 + 16);
+            uint8_t  a = cmos_rw(0x0a, 0, 0), b = cmos_rw(0x0b, 0, 0);
+            lapic_save();
+            apic_idt_on();
+            lapic_wr(LAPIC_SVR, 0x1ff);
+            lapic_wr(LAPIC_TPR, 0);
+            cmos_rw(0x0a, 1, (a & 0xf0) | 0x06); /* 1024 Hz */
+            cmos_rw(0x0b, 1, b | 0x40);          /* periodic interrupt on */
+            cmos_rw(0x0c, 0, 0);                 /* acknowledge what's there */
+            ioapic_wr(0x11 + 16, own << 24);
+            ioapic_wr(0x10 + 16, 0x00000068);    /* fixed, physical, edge, high, vector 68h, unmasked */
+            /* The RTC holds its line until register C is read: a handler
+               would read it; here IF is on only in short windows and C is
+               read between them, so each window sees at most one edge. */
+            uint32_t got = 0;
+            for (int k = 0; k < 8; k++) {
+                __asm__ volatile("sti" : : : "memory");
+                delay_us(2000);
+                __asm__ volatile("cli" : : : "memory");
+                cmos_rw(0x0c, 0, 0);
+            }
+            got     = g_irq_hits[0x68];
+            f[1][0] = got >= 4; /* at least half the windows: it keeps arriving */
+            ioapic_wr(0x10 + 16, 0x00010068);    /* masked */
+            cmos_rw(0x0c, 0, 0);
+            g_irq_hits[0x68] = 0;
+            __asm__ volatile("sti" : : : "memory");
+            delay_us(5000);
+            __asm__ volatile("cli" : : : "memory");
+            f[1][1] = g_irq_hits[0x68];          /* 0 while masked */
+            f[1][2] = ioapic_rd(0x10 + 16) & 0x5000; /* delivery status, remote IRR */
+            ioapic_wr(0x10 + 16, lo | 0x10000);
+            ioapic_wr(0x11 + 16, hi);
+            ioapic_wr(0x10 + 16, lo);
+            cmos_rw(0x0b, 1, b);
+            cmos_rw(0x0a, 1, a);
+            cmos_rw(0x0c, 0, 0);
+            apic_idt_off();
+            lapic_restore();
+        } else
+            f[1][0] = 2; /* no INTIN 8 */
+    }
+    run_facts(&v, f[0]);
+    run_facts(&v, f[1]);
+    group_end(name);
+#endif
+}

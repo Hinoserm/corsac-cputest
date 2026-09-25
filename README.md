@@ -197,6 +197,7 @@ goes into the group that already covers it, not into a group of its own.
 | 281 | `smp.start` | starting every other processor the tables list (INIT, INIT de-assert, two STARTUPs, the MP spec's delays, every wait bounded): how many listed and started, each arrival's EDX (its signature) and CR0; each then waits in a mailbox loop with its own IDT (a fault there stops only it). Machine facts: no reference |
 | 282 | `smp.ipi` | IPIs from the boot processor: physical fixed and NMI to each other processor, all-but-self, logical flat to all of them in one; each taken exactly once, the sender excluded |
 | 283 | `smp.lock` | every processor at once, 100000 times each: LOCK INC, LOCK XADD, a LOCK CMPXCHG loop, a plain increment under an XCHG spinlock, LOCK ADD across two cache lines; each total exact |
+| 284 | `ioapic` | the first I/O APIC the tables list: ID, version and highest entry, arbitration ID, every redirection entry's writable bits (kept masked); the RTC's periodic interrupt (IRQ 8) through it as fixed, edge, to the boot processor, arriving while unmasked and not while masked. Machine facts: no reference |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
