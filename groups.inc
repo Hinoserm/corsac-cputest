@@ -440,6 +440,7 @@ static const struct group_def groups[] = {
     G(group_pg_readonly_wp0),
     G(group_pg_readonly_wp1),
     G(group_pg_cross),
+    G(group_pg_ad),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

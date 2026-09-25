@@ -106,6 +106,7 @@ between versions until the group itself changes.
 | 202 | `pg.readonly.wp0` | a read-only page with CR0.WP clear: supervisor writes go through |
 | 203 | `pg.readonly.wp1` | the same with CR0.WP set: supervisor writes fault (486 on) |
 | 204 | `pg.cross` | accesses split across a present and a missing page: which half faults, CR2, nothing written (raw) |
+| 205 | `pg.ad` | the accessed and dirty bits in the PTE after a read, a write, RMW, and a write after a read |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
