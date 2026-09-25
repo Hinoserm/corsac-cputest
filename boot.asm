@@ -35,22 +35,35 @@ start:
         test    cl, 1
         jz      chs
 
-        ; Extended reads, 32 sectors at a time: some BIOSes take no more
-        ; than 127 in one call.
+        ; Extended reads, up to 32 sectors at a time (some BIOSes take no
+        ; more than 127 in one call). The BIOS writes back how many it
+        ; read into the count: ask again every call, and go on by what it
+        ; says it did.
 .ext:
+        mov     ax, [left]
+        cmp     ax, 32
+        jbe     .ask
+        mov     ax, 32
+.ask:   mov     [dap + 2], ax
         mov     si, dap
         mov     ah, 0x42
         mov     dl, [drive]
         int     0x13
         jc      chs
-        add     word [dap + 6], 32 * 512 / 16   ; next segment
-        add     word [dap + 8], 32              ; next LBA
-        sub     word [left], 32
-        ja      .ext
+        mov     ax, [dap + 2]
+        test    ax, ax
+        jz      chs
+        add     [dap + 8], ax                   ; next LBA
+        sub     [left], ax
+        shl     ax, 5                           ; sectors to paragraphs
+        add     [dap + 6], ax                   ; next segment
+        cmp     word [left], 0
+        jne     .ext
         jmp     loaded
 
 chs:
         ; Geometry, then sector by sector.
+        mov     byte [by_chs], 1
         mov     ah, 0x08
         mov     dl, [drive]
         push    es
@@ -109,6 +122,8 @@ loaded:
         loop    .sum
         cmp     dx, IMAGE_SUM
         je      .good
+        cmp     byte [by_chs], 0        ; damaged after extended reads: once more,
+        je      chs                     ; sector by sector through CHS
         mov     si, msg_bad
         call    print
         jmp     fail.halt
@@ -140,6 +155,7 @@ msg_fail db "CPUTEST: disk read failed", 13, 10, 0
 msg_bad  db "CPUTEST: image damaged in memory", 13, 10, 0
 
 drive   db 0
+by_chs  db 0
         align 2
 spt     dw 0
 heads   dw 0
