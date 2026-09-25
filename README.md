@@ -181,6 +181,7 @@ between versions until the group itself changes.
 | 282 | `string.long` | long REP STOS, MOVS, CMPS and SCAS across the sandbox's pages, unaligned and backwards |
 | 283 | `sreg.upper` | MOV r32/r16/m16, Sreg for every segment register, and PUSH Sreg with a 32-bit operand: how much of the slot is written |
 | 284 | `lar.systypes` | LAR, LSL and VERR of each of the 16 system descriptor types |
+| 285 | `seg.types` | each of the 16 code/data types at DPL 0 from ring 0 and DPL 3 from ring 3: VERR, VERW, a load into FS, a read and a write |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

@@ -526,6 +526,7 @@ static const struct group_def groups[] = {
     G(group_string_long),
     G(group_sreg_upper),
     G(group_lar_systypes),
+    G(group_seg_types),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

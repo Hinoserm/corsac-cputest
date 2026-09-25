@@ -429,3 +429,44 @@ group_lar_systypes(void)
     }
     ring_end(v.group, 0, 0);
 }
+
+/* The 16 code and data types (S = 1), at DPL 0 from ring 0 and DPL 3
+   from ring 3: VERR, VERW, LAR, and a load into FS, a read and a write
+   through it. */
+static void
+group_seg_types(void)
+{
+    struct variant v = { .group = "seg.types", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                         .fix_input = fix_ring, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+    static const uint8_t checks[] = {
+        0x66, 0xb9, 0x00, 0x00, /* mov cx, sel */
+        0x0f, 0x00, 0xe1,       /* verr cx */
+        0x0f, 0x94, 0xc3,       /* setz bl */
+        0x0f, 0x00, 0xe9,       /* verw cx */
+        0x0f, 0x94, 0xc7,       /* setz bh */
+    };
+    static const uint8_t use[] = {
+        0x66, 0xb8, 0x00, 0x00, /* mov ax, sel; mov fs, ax */
+        0x8e, 0xe0,
+        0x64, 0x8b, 0x35, 0x10, 0x00, 0x00, 0x00, /* mov esi, fs:[10h] */
+        0x64, 0x89, 0x0d, 0x20, 0x00, 0x00, 0x00, /* mov fs:[20h], ecx */
+    };
+    if (!ring_begin(v.group, 0, 0))
+        return;
+    for (int r = 0; r <= 3; r += 3) {
+        for (int t = 0; t < 16; t++) {
+            for (int k = 0; k < 2; k++) {
+                const uint8_t *b = k ? use : checks;
+                int            n = k ? (int) sizeof(use) : (int) sizeof(checks);
+                memcpy(v.target, b, n);
+                v.target[2]  = SEL_SCRATCH | r;
+                v.target_len = n;
+                v.ring       = r;
+                v.arg        = SCRATCH_RAW(0x90 | (r << 5) | t, 0x4);
+                v.arg2       = RF_SANDBOX;
+                run_plain(&v, 1);
+            }
+        }
+    }
+    ring_end(v.group, 0, 0);
+}
