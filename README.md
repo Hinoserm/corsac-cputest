@@ -104,6 +104,7 @@ between versions until the group itself changes.
 | 200 | `pg.basic`    | with paging on (identity map, 4 KB pages): loads, stores, RMW, XADD/XCHG and PUSH/POP to memory, misaligned across a page boundary |
 | 201 | `pg.notpresent` | #PF from a missing page: loads, stores, RMW, LOCK, PUSH/POP to memory; error code and CR2 (RMW forms raw only) |
 | 202 | `pg.readonly.wp0` | a read-only page with CR0.WP clear: supervisor writes go through |
+| 203 | `pg.readonly.wp1` | the same with CR0.WP set: supervisor writes fault (486 on) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
