@@ -13,7 +13,7 @@ CFLAGS = [
     "-m32", "-march=i386", "-Os", "-std=gnu11",
     "-ffreestanding", "-fno-pic", "-fno-pie", "-fno-stack-protector",
     "-fno-asynchronous-unwind-tables", "-fno-builtin", "-nostdlib",
-    "-Wall", "-Wextra", "-Wno-unused-parameter",
+    "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-missing-field-initializers",
 ]
 
 
@@ -44,7 +44,7 @@ def build_host():
     extra = dump_flags()
     out = "cputest-dump" if extra else "cputest"
     run([MUSL_GCC, "-static", "-no-pie", "-fno-pie", "-march=i486", "-mtune=i486", "-O2", "-std=gnu11", "-DHOSTTEST"] + extra + [
-         "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-unused-function",
+         "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-unused-function", "-Wno-missing-field-initializers",
          "-I", HERE, "-o", out, os.path.join(HERE, "harness.c")])
 
 

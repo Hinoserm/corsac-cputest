@@ -768,7 +768,18 @@ extern uint8_t gdt[];
 #define SEL_GATE3P  0x88 /* call gate, DPL 3, to ring 0, two parameters */
 #define SEL_SCRATCH 0x90 /* a data descriptor tests rewrite */
 #define SEL_GATE21  0x98 /* call gate, DPL 2, to ring 1 */
-#define RING_GDT_N  20
+#define SEL_CONF1   0xa0 /* conforming code, DPL 1 */
+#define SEL_CONF3   0xa8 /* conforming code, DPL 3 */
+#define SEL_GATE33  0xb0 /* call gate, DPL 3, to ring 3 */
+#define SEL_GATE3P1 0xb8 /* call gate, DPL 3, to ring 1, three parameters */
+#define SEL_C16R3   0xc0 /* 16-bit code, DPL 3, based at the test's code */
+#define SEL_C16R1   0xc8 /* 16-bit code, DPL 1, the same */
+#define SEL_NP3     0xd0 /* data, DPL 3, not present */
+#define SEL_XO3     0xd8 /* code, DPL 3, execute-only */
+#define SEL_RO3     0xe0 /* data, DPL 3, read-only */
+#define SEL_C16R2   0xe8 /* 16-bit code, DPL 2 */
+#define SEL_GATE13  0xf0 /* call gate, DPL 1, to ring 3 code (outward: #GP) */
+#define RING_GDT_N  31
 
 #define V86_BLOCK   0x8000u /* the V86 test's inputs, below 64 KB */
 #define V86_STACK   0x7f00u
@@ -796,7 +807,45 @@ static uint8_t g_gate_ret[] RING_UNUSED = { 0x8c, 0xce, 0xcb };                 
 /* For the gates into ring 1: also ESP and SS there, to show the stack
    switch (or its absence). */
 static uint8_t g_gate_retsp[] RING_UNUSED = { 0x8c, 0xce, 0x89, 0xe7, 0x8c, 0xd5, 0xcb }; /* mov esi, cs; mov edi, esp; mov ebp, ss; retf */
+/* The three-parameter gate into ring 1: CS, and the first and last
+   parameters (as copied), then RETF 12. */
+static uint8_t g_gate_retp3[] RING_UNUSED = { 0x8c, 0xce, 0x8b, 0x7c, 0x24, 0x08, 0x8b, 0x6c, 0x24, 0x10, 0xca, 0x0c, 0x00 };
+/* An interrupt or trap gate's handler in ring 1, 2 or 3: CS, ESP, SS,
+   and IRETD back. */
+static uint8_t g_ring_isr[] RING_UNUSED = { 0x8c, 0xce, 0x89, 0xe7, 0x8c, 0xd5, 0xcf };
 static uint8_t g_gate_retp[] RING_UNUSED = { 0x8c, 0xce, 0x8b, 0x7c, 0x24, 0x0c, 0xca, 0x08, 0x00 }; /* ...; mov edi, [esp+12]; retf 8 */
+
+static void seg_desc(int sel, uint32_t base, uint32_t limit, uint8_t access, uint8_t flags);
+
+/* The scratch descriptor (SEL_SCRATCH) a limits or stack test loads,
+   based 4 KB into the sandbox: (access, flags, limit) by config. */
+static const struct {
+    uint8_t  access, flags;
+    uint32_t limit;
+} g_scratch_cfg[] RING_UNUSED = {
+    { 0xf2, 0x4, 0x0fff }, /* 0: data, read/write, DPL 3, 4 KB */
+    { 0xf0, 0x4, 0x0fff }, /* 1: data, read-only */
+    { 0xf6, 0x4, 0x0fff }, /* 2: data, expand-down: 1000h up to 4 GB */
+    { 0xf6, 0x0, 0x0fff }, /* 3: expand-down, 16-bit: 1000h up to 64 KB */
+    { 0xfa, 0x4, 0x0fff }, /* 4: code, execute/read */
+    { 0xf8, 0x4, 0x0fff }, /* 5: code, execute-only */
+    { 0xf2, 0xc, 0x00000 }, /* 6: data, one 4 KB page (granular) */
+    { 0xb2, 0x4, 0x0fff }, /* 7: data, DPL 1 */
+    { 0x72, 0x4, 0x0fff }, /* 8: data, not present */
+};
+#define N_SCRATCH (sizeof(g_scratch_cfg) / sizeof(g_scratch_cfg[0]))
+
+/* arg: the config in the low byte, the DPL in bits 9-10 (config 7 keeps
+   its own DPL 1). */
+static void
+scratch_set(unsigned arg)
+{
+    unsigned cfg = arg & 0xff, dpl = (arg >> 9) & 3;
+    uint8_t  acc = g_scratch_cfg[cfg].access;
+    if (cfg != 7)
+        acc = (acc & ~0x60) | (dpl << 5);
+    seg_desc(SEL_SCRATCH, (uint32_t) SANDBOX + 0x1000, g_scratch_cfg[cfg].limit, acc, g_scratch_cfg[cfg].flags);
+}
 
 static void
 seg_desc(int sel, uint32_t base, uint32_t limit, uint8_t access, uint8_t flags)
@@ -841,6 +890,17 @@ ring_build(void)
     gate_desc(g_gdt2 + (SEL_GATE3P >> 3) * 2, 0x08, (uint32_t) g_gate_retp, 0xec, 2);
     seg_desc(SEL_SCRATCH, 0, 0xfffff, 0xf2, 0xc);
     gate_desc(g_gdt2 + (SEL_GATE21 >> 3) * 2, SEL_CODE1, (uint32_t) g_gate_retsp, 0xcc, 0);
+    seg_desc(SEL_CONF1, 0, 0xfffff, 0xbe, 0xc);
+    seg_desc(SEL_CONF3, 0, 0xfffff, 0xfe, 0xc);
+    gate_desc(g_gdt2 + (SEL_GATE33 >> 3) * 2, SEL_CODE3, (uint32_t) g_gate_ret, 0xec, 0);
+    gate_desc(g_gdt2 + (SEL_GATE3P1 >> 3) * 2, SEL_CODE1, (uint32_t) g_gate_retp3, 0xec, 3);
+    seg_desc(SEL_C16R3, 0, 0xffff, 0xfa, 0);
+    seg_desc(SEL_C16R1, 0, 0xffff, 0xba, 0);
+    seg_desc(SEL_NP3, 0, 0xfffff, 0x72, 0xc);
+    seg_desc(SEL_XO3, 0, 0xfffff, 0xf8, 0xc);
+    seg_desc(SEL_RO3, 0, 0xfffff, 0xf0, 0xc);
+    seg_desc(SEL_C16R2, 0, 0xffff, 0xda, 0);
+    gate_desc(g_gdt2 + (SEL_GATE13 >> 3) * 2, SEL_CODE3, (uint32_t) g_gate_ret, 0xac, 0);
 
     memset(g_idt2, 0, sizeof(g_idt2));
     for (int i = 0; i < 32; i++)
@@ -848,6 +908,11 @@ ring_build(void)
     gate_desc(g_idt2 + 0x30 * 2, 0x08, (uint32_t) isr_48, 0xee, 0); /* DPL 3: the way back */
     gate_desc(g_idt2 + 0x31 * 2, 0x08, (uint32_t) isr_48, 0x8e, 0); /* DPL 0 */
     gate_desc(g_idt2 + 0x32 * 2, 0x08, (uint32_t) isr_48, 0xae, 0); /* DPL 1 */
+    gate_desc(g_idt2 + 0x33 * 2, SEL_CODE1, (uint32_t) g_ring_isr, 0xee, 0); /* interrupt gate into ring 1 */
+    gate_desc(g_idt2 + 0x34 * 2, SEL_CODE1, (uint32_t) g_ring_isr, 0xef, 0); /* trap gate into ring 1 */
+    gate_desc(g_idt2 + 0x35 * 2, SEL_CODE2, (uint32_t) g_ring_isr, 0xee, 0); /* into ring 2 */
+    gate_desc(g_idt2 + 0x36 * 2, SEL_CODE3, (uint32_t) g_ring_isr, 0xee, 0); /* into ring 3 */
+    gate_desc(g_idt2 + 0x37 * 2, SEL_CODE1, (uint32_t) g_ring_isr, 0xae, 0); /* into ring 1, DPL 1 */
 
     memset(g_tss, 0, sizeof(g_tss));
     *(uint32_t *) (g_tss + 4)   = (uint32_t) g_rstack[0] + sizeof(g_rstack[0]);
@@ -1306,7 +1371,13 @@ emit_ring_regs(struct emit *e, int v86)
     static const int order[] = { R_ECX, R_EDX, R_EBX, R_EBP, R_ESI, R_EDI, R_EAX };
     for (unsigned i = 0; i < 7; i++) {
         uint32_t *r = in_reg(order[i]);
-        if (v86) {
+        if (v86 == 2) { /* 16-bit protected-mode code: mov r32, [abs32] */
+            e8(e, 0x66);
+            e8(e, 0x67);
+            e8(e, 0x8b);
+            e8(e, 0x05 | (order[i] << 3));
+            e32(e, (uint32_t) r);
+        } else if (v86) {
             uint32_t disp = V86_BLOCK + (uint32_t) ((uint8_t *) r - (uint8_t *) &g_in);
             e8(e, 0x66); /* mov r32, [disp16] */
             e8(e, 0x8b);
@@ -1328,7 +1399,8 @@ emit_ring_regs(struct emit *e, int v86)
 static void
 emit_ring(struct emit *e, const struct variant *v)
 {
-    static const uint8_t code_sel[4] = { 0, SEL_CODE1 | 1, SEL_CODE2 | 2, SEL_CODE3 | 3 };
+    static const uint8_t code_sel[4]   = { 0, SEL_CODE1 | 1, SEL_CODE2 | 2, SEL_CODE3 | 3 };
+    static const uint8_t code16_sel[4] = { 0, SEL_C16R1 | 1, SEL_C16R2 | 2, SEL_C16R3 | 3 };
     static const uint8_t data_sel[4] = { 0, SEL_DATA1 | 1, SEL_DATA2 | 2, SEL_DATA3 | 3 };
     int                  v86          = v->ring == 4;
     uint8_t             *low          = 0, *push_l = 0;
@@ -1365,8 +1437,8 @@ emit_ring(struct emit *e, const struct variant *v)
         e32(e, 0);
     } else {
         e8(e, 0x6a); /* CS */
-        e8(e, code_sel[v->ring]);
-        e8(e, 0x68); /* EIP: just after the IRETD */
+        e8(e, v->code16 ? code16_sel[v->ring] : code_sel[v->ring]);
+        e8(e, 0x68); /* EIP: just after the IRETD (0 in a 16-bit segment based there) */
         push_l = e->p;
         e32(e, 0);
     }
@@ -1379,6 +1451,24 @@ emit_ring(struct emit *e, const struct variant *v)
         e8(&c, 0x30);
         g_cur_low     = low;
         g_cur_low_len = c.p - low;
+    } else if (v->code16) {
+#ifndef HOSTTEST
+        uint32_t base = (uint32_t) e->p;
+        int      sel  = code16_sel[v->ring] & ~3;
+        g_gdt2[(sel >> 3) * 2]     = (g_gdt2[(sel >> 3) * 2] & 0xffff) | (base << 16);
+        g_gdt2[(sel >> 3) * 2 + 1] = (g_gdt2[(sel >> 3) * 2 + 1] & 0x00ffff00) | ((base >> 16) & 0xff) | (base & 0xff000000);
+#endif
+        e8(e, 0xb8); /* mov ax, data selector; mov ds, ax; mov es, ax (16-bit code) */
+        e8(e, data_sel[v->ring]);
+        e8(e, 0x00);
+        e8(e, 0x8e);
+        e8(e, 0xd8);
+        e8(e, 0x8e);
+        e8(e, 0xc0);
+        emit_ring_regs(e, 2);
+        emit_body(e, v);
+        e8(e, 0xcd); /* int 30h */
+        e8(e, 0x30);
     } else {
         put32_at(push_l, (uint32_t) e->p);
         e8(e, 0x66); /* mov ax, data selector; mov ds, ax; mov es, ax */

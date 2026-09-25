@@ -138,6 +138,7 @@ between versions until the group itself changes.
 | 239 | `v86.io` | the I/O bitmap in V86 mode, at IOPL 3 too |
 | 240 | `v86.ud` | protected-mode-only instructions in V86 (#UD), an address past 64 KB (#GP) |
 | 241 | `v86.vme` | VME: CLI/STI on VIF, PUSHF/POPF with VIF, INT 60h redirected through the V86 vector table or faulting |
+| 242 | `r3.limits` | FS on read/write, read-only, expand-down (32 and 16-bit), execute/read and execute-only code, page-granular, DPL-1 and missing descriptors at CPL 3, accessed either side of the limit |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -289,7 +290,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_map.inc` | groups 179-194: the 0F opcode map                          |
 | `groups_cpu.inc` | groups 195-199: aliases, CPUID, MSRs, the TSC, Cyrix       |
 | `groups_paging.inc` | groups 200-210: paging                                  |
-| `groups_ring.inc` | groups 211 on: rings 1-3 and V86 mode                    |
+| `groups_ring.inc` | groups 211-241: rings 1-3 and V86 mode                   |
+| `groups_ring2.inc` | groups 242 on: limits, stacks, gates, 16-bit code in rings |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

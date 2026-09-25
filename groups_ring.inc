@@ -25,6 +25,8 @@ static void
 ring_setup(const struct variant *v)
 {
 #ifndef HOSTTEST
+    if (v->arg & 0x100) /* a scratch descriptor config */
+        scratch_set(v->arg);
     g_tss[TSS_IOMAP + 0x80 / 8] = (v->arg3 & 1) ? 0x01 : 0x00;
     if (v->arg3 & 2)
         g_tss[104 + 0x60 / 8] &= ~0x01;
@@ -36,7 +38,7 @@ ring_setup(const struct variant *v)
 }
 
 /* Inputs a ring test may need (fix field). */
-enum { RF_NONE, RF_MEM, RF_POPF, RF_PORT, RF_V86MEM, RF_V86FAR };
+enum { RF_NONE, RF_MEM, RF_POPF, RF_PORT, RF_V86MEM, RF_V86FAR, RF_SANDBOX /* no input, but writes the sandbox */ };
 
 static void
 fix_ring(const struct variant *v)
@@ -64,7 +66,9 @@ fix_ring(const struct variant *v)
    bitmap setup, the input it needs, whether its result is defined across
    models, and its bytes. */
 struct ring_seq {
-    uint8_t ring, iopl, ac, setup, fix, defined, len, b[24];
+    uint8_t  ring, iopl, ac, setup, fix, defined, len, b[24];
+    uint16_t scratch; /* 0, or 0x100 | config | DPL << 9: the scratch descriptor to load */
+    uint8_t  code16;  /* run as 16-bit code (rings 1-3) */
 };
 
 static int
@@ -116,6 +120,8 @@ ring_run(const char *name, const struct ring_seq *seqs, unsigned n, uint32_t cr4
         v.fx_arg     = seqs[i].defined;
         v.norm       = seqs[i].fix == RF_MEM ? 1 << R_EBX : seqs[i].fix == RF_PORT ? 1 << R_ESI : 0;
         v.canon      = seqs[i].ring == 4 && seqs[i].b[0] == 0x8c && seqs[i].b[1] == 0xc8 ? canon_v86_cs : 0;
+        v.arg        = seqs[i].scratch;
+        v.code16     = seqs[i].code16;
         run_plain(&v, 1);
     }
     ring_end(name, cr4, cr0);
