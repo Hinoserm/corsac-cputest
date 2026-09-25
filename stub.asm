@@ -24,7 +24,8 @@ init:
         xor     ax, ax
         mov     ss, ax
         mov     sp, 0x7000
-
+        mov     si, msg_map             ; each stage says it started, so a board
+        call    rprint                  ; that stops here shows where
         ; The BIOS memory map (INT 15h, AX=E820h) for the harness, at
         ; 0000:E820_AT: a status word, an entry count, then 24-byte
         ; entries. The status is itself a result (a BIOS without the call
@@ -44,6 +45,8 @@ init:
         mov     ecx, 24
         mov     dword [di + 20], 1      ; ACPI 3 attributes: valid unless the BIOS writes them
         int     0x15
+        mov     si, 0                   ; DS again, whatever the BIOS left in it
+        mov     ds, si
         jc      .e820_cf
         cmp     eax, 0x534d4150
         jne     .e820_sig
@@ -71,10 +74,17 @@ init:
 .e820_ok:
         mov     word [E820_AT], 1
 .e820_done:
-        cli
+        mov     al, [E820_AT]           ; the status, as a digit
+        add     al, '0'
+        call    rputch
+        mov     si, msg_a20
+        call    rprint
 
-        ; A20: port 92h (fast A20), then the keyboard controller for boards
-        ; without it.
+        ; A20: the BIOS (INT 15h AX=2401h), port 92h (fast A20), then the
+        ; keyboard controller; then a wrap test says whether it took.
+        mov     ax, 0x2401
+        int     0x15
+        cli
         in      al, 0x92
         or      al, 0x02
         and     al, 0xfe
@@ -86,6 +96,17 @@ init:
         mov     al, 0xdf
         out     0x60, al
         call    kbc_wait
+        call    a20_on
+        mov     si, msg_on
+        jnc     .a20_ok
+        mov     si, msg_off
+        call    rprint
+.stop:  hlt                             ; nothing sensible runs with A20 off
+        jmp     .stop
+.a20_ok:
+        call    rprint
+        mov     si, msg_pm
+        call    rprint
 
         ; Linear address of this ROM.
         mov     ax, cs
@@ -110,6 +131,57 @@ init:
         lea     eax, [ebp + pm32]
         push    eax
         o32 retf
+
+; Real-mode messages through the BIOS; the strings are in this segment.
+rprint:
+        push    ds
+        push    cs
+        pop     ds
+.next:  lodsb
+        test    al, al
+        jz      .done
+        call    rputch
+        jmp     .next
+.done:  pop     ds
+        ret
+
+rputch:
+        push    bx
+        mov     ah, 0x0e
+        mov     bx, 0x0007
+        int     0x10
+        pop     bx
+        ret
+
+; CF clear if A20 is on: 0000:0500 and FFFF:0510 are the same byte with it
+; off.
+a20_on:
+        push    ds
+        push    es
+        xor     ax, ax
+        mov     ds, ax
+        not     ax
+        mov     es, ax
+        mov     bl, [0x0500]
+        mov     bh, [es:0x0510]
+        mov     byte [0x0500], 0x00
+        mov     byte [es:0x0510], 0xff
+        cmp     byte [0x0500], 0xff
+        mov     [es:0x0510], bh
+        mov     [0x0500], bl
+        pop     es
+        pop     ds
+        je      .off
+        clc
+        ret
+.off:   stc
+        ret
+
+msg_map db "CPUTEST: memory map ", 0
+msg_a20 db ", A20 ", 0
+msg_on  db "on", 0
+msg_off db "OFF: cannot run", 13, 10, 0
+msg_pm  db ", protected mode", 13, 10, 0
 
 kbc_wait:
         mov     cx, 0xffff

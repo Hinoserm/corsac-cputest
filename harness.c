@@ -2146,12 +2146,21 @@ cmain(uint32_t rom_base)
 {
     post(0x01);
     serial_init();
+    /* Each start-up step says it's done, so a board that stops early shows
+       where. */
+    puts_("CPUTEST: harness c");
     crc_init();
+    putch('i');
     idt_init();
+    putch('p');
     cpu_detect();
+    putch('e');
     e820_read();
+    putch('r');
     ram_detect();
+    putch('a');
     arena_init();
+    putch('\n');
 #ifndef HOSTTEST
     /* Every IRQ masked: SYSRET, and STI in the rings, can leave IF set in
        a test, and nothing here wants an interrupt. */
