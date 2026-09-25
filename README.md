@@ -108,6 +108,7 @@ between versions until the group itself changes.
 | 209 | `pg.exec` | a jump and a call into a missing page: #PF on the fetch |
 | 210 | `pg.smc.alias` | code patched through a second mapping of its own page |
 | 211 | `r3.basic` | code at CPL 3: arithmetic, memory, the stack, and what it can see (CS, SS, DS, PUSHFD, SMSW, STR, SLDT, SGDT) |
+| 212 | `r3.priv` | every privileged instruction at CPL 3: #GP(0) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
