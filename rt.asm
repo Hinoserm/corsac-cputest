@@ -63,6 +63,7 @@ kernel_return:
         cld
         mov     dword [g_in_kernel], 0
         mov     ax, 0x10                ; a ring or V86 test may have left others
+        mov     ss, ax                  ; (and a 16-bit stack test its SS; ESP is already ours)
         mov     ds, ax
         mov     es, ax
         mov     fs, ax

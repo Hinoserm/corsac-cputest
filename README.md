@@ -173,6 +173,7 @@ between versions until the group itself changes.
 | 274 | `task.call` | task switches by CALL to a TSS, a GDT task gate and an IDT task gate (from rings 0 and 3): the new task's registers, TR, NT and back link; IRET back, TR and busy bits after |
 | 275 | `task.jmp` | task switches by JMP to a TSS and a task gate and back: no nesting, no back link |
 | 276 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
+| 277 | `lock.legal` | LOCK on every lockable instruction with a memory destination, and #UD on CMP, TEST, MOV, BT, PUSH/POP, the register forms and one-byte INC |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -329,6 +330,7 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_debug.inc` | groups 255-263: single-step and the debug registers      |
 | `groups_sys.inc` | groups 264-269: control registers                        |
 | `groups_desc.inc` | groups 270 on: descriptors, the LDT, task switches        |
+| `groups_prot.inc` | groups 277 on: LOCK, overrides, far loads, descriptor types, IDT |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

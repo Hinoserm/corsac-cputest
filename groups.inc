@@ -398,6 +398,7 @@ group_bt(void)
 #include "groups_debug.inc"
 #include "groups_sys.inc"
 #include "groups_desc.inc"
+#include "groups_prot.inc"
 
 /* The groups in order. A group is a function, or one of a family of
    parametrised ones (the sampled loops) with its index. */
@@ -517,6 +518,7 @@ static const struct group_def groups[] = {
     G(group_task_call),
     G(group_task_jmp),
     G(group_task_errors),
+    G(group_lock_legal),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
@@ -525,7 +527,12 @@ static void
 run_groups(void)
 {
     g_group_count = sizeof(groups) / sizeof(groups[0]);
-    for (int i = 0; i < g_group_count; i++) {
+    int first     = 0;
+#ifdef HOSTTEST
+    if (getenv("CPUTEST_FROM")) /* start at this group number */
+        first = atoi(getenv("CPUTEST_FROM")) - 1;
+#endif
+    for (int i = first; i < g_group_count; i++) {
         g_group_no = i + 1;
         for (g_counting = 1; g_counting >= 0; g_counting--) {
             if (groups[i].fn)

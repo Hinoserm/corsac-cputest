@@ -577,6 +577,7 @@ struct variant {
     uint8_t       reg_fix;       /* fix_input sets registers only: no sandbox refill */
     uint8_t       mmx;           /* MM0-MM7 loaded from g_mmx_in, stored to g_mmx_out */
     uint8_t       code16;        /* producer and target run in a 16-bit code segment */
+    uint16_t      code16_ip;     /* ... starting at this IP (the segment based that much before the code) */
     uint8_t       paging;        /* #PF: fault_err = error code | (CR2 - buffer) << 8 */
     uint8_t       ring;          /* 1-3: run at that CPL; 4: in V86 mode (see ring_env_on()) */
     uint8_t       debug;         /* fault_err = DR6 after the run, fault or not */
@@ -848,10 +849,15 @@ static const struct {
 #define N_SCRATCH (sizeof(g_scratch_cfg) / sizeof(g_scratch_cfg[0]))
 
 /* arg: the config in the low byte, the DPL in bits 9-10 (config 7 keeps
-   its own DPL 1). */
+   its own DPL 1). With bit 11 set instead: the access byte itself in bits
+   12-19 and the flags nibble in 20-23, limit 0FFFh. */
 static void
 scratch_set(unsigned arg)
 {
+    if (arg & 0x800) {
+        seg_desc(SEL_SCRATCH, (uint32_t) SANDBOX + 0x1000, 0x0fff, (arg >> 12) & 0xff, (arg >> 20) & 0xf);
+        return;
+    }
     unsigned cfg = arg & 0xff, dpl = (arg >> 9) & 3;
     uint8_t  acc = g_scratch_cfg[cfg].access;
     if (cfg != 7)
@@ -945,6 +951,11 @@ ring_build(void)
     gate_desc(g_idt2 + 0x36 * 2, SEL_CODE3, (uint32_t) g_ring_isr, 0xee, 0); /* into ring 3 */
     gate_desc(g_idt2 + 0x37 * 2, SEL_CODE1, (uint32_t) g_ring_isr, 0xae, 0); /* into ring 1, DPL 1 */
     gate_desc(g_idt2 + 0x38 * 2, SEL_TSS2, 0, 0xe5, 0);                     /* a task gate, DPL 3 */
+    gate_desc(g_idt2 + 0x39 * 2, 0x08, (uint32_t) isr_48, 0x6e, 0);          /* not present: #NP */
+    gate_desc(g_idt2 + 0x3a * 2, 0x08, (uint32_t) isr_48, 0xe0, 0);          /* type 0, invalid: #GP */
+    gate_desc(g_idt2 + 0x3b * 2, 0x08, (uint32_t) isr_48, 0xef, 0);          /* a 386 trap gate, DPL 3 */
+    gate_desc(g_idt2 + 0x3c * 2, 0x10, (uint32_t) isr_48, 0xee, 0);          /* to a data segment: #GP */
+    gate_desc(g_idt2 + 0x3d * 2, 0x00, (uint32_t) isr_48, 0xee, 0);          /* to the null selector: #GP */
 
     memset(g_tss, 0, sizeof(g_tss));
     *(uint32_t *) (g_tss + 4)   = (uint32_t) g_rstack[0] + sizeof(g_rstack[0]);
@@ -1534,7 +1545,7 @@ def_hash(const struct variant *v)
 {
     uint32_t f[16] = { v->target_len, v->producer, v->boundary, v->fx, v->fx_arg, v->arg, v->arg2, v->arg3,
                        v->flags_mask, v->stack | (v->mmx << 1) | (v->code16 << 2) | (v->paging << 3) | (v->faults_ok << 4) | (v->no_ref << 5) | (v->reg_fix << 6) | (v->debug << 7),
-                       v->ring, v->ring_flags, v->norm, v->emit != 0, v->defmask != 0, (v->fix_input != 0) | ((v->canon != 0) << 1) };
+                       v->ring | (v->code16_ip << 8), v->ring_flags, v->norm, v->emit != 0, v->defmask != 0, (v->fix_input != 0) | ((v->canon != 0) << 1) };
     g_defhash = crc_add(g_defhash, v->target, v->target_len);
     g_defhash = crc_add(g_defhash, f, sizeof(f));
 }
@@ -1595,8 +1606,8 @@ run_variant(const struct variant *v)
             }
         }
         if (v->code16) {
-            e8(&e, 0x9a); /* call far 18h:0000; the 16-bit part follows the epilogue */
-            e32(&e, 0);
+            e8(&e, 0x9a); /* call far 18h:IP; the 16-bit part follows the epilogue */
+            e32(&e, v->code16_ip);
             e8(&e, SEL_CODE16);
             e8(&e, 0x00);
             if (v->stack) {
@@ -1628,7 +1639,7 @@ run_variant(const struct variant *v)
         }
         emit_epilogue(&e, v->stack || v->flags_mask);
         if (v->code16) {
-            code16_base((uint32_t) e.p);
+            code16_base((uint32_t) e.p - v->code16_ip);
             emit_body(&e, v);
             e8(&e, 0x66); /* o32 retf: back to the 32-bit caller */
             e8(&e, 0xcb);
@@ -1657,6 +1668,10 @@ run_variant(const struct variant *v)
         if (v->before_run)
             v->before_run(v);
         int vec = run_kernel(slot);
+#ifndef HOSTTEST
+        /* a test that loads FS or GS and doesn't fault leaves them loaded */
+        __asm__ volatile("mov %0, %%fs\n\tmov %0, %%gs" : : "r"(0x10));
+#endif
         if (v->after_run)
             v->after_run(v);
         capture(v, &out[r], slot, vec, mem);
