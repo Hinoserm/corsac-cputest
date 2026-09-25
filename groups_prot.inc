@@ -719,3 +719,47 @@ group_iret_flags(void)
     }
     group_end(name);
 }
+
+/* ---- XLAT ----------------------------------------------------------------------------------- */
+
+/* XLAT with DS, with an override (ES:, CS:), with a null FS (#GP), and in
+   16-bit addressing (BX; the low buffer). */
+static void
+fix_xlat2(const struct variant *v)
+{
+    if (v->arg2) {
+#ifdef HOSTTEST
+        g_skip = 1;
+#endif
+        g_in.ebx = (rnd() & 0xffff0000u) | (uint32_t) LOWBUF;
+        g_in.eax = (g_in.eax & ~0xffu) | (rnd() & 15);
+    } else {
+        g_in.ebx = (uint32_t) g_buf;
+        g_in.eax = (g_in.eax & ~0xffu) | (rnd() & 63);
+    }
+}
+
+static void
+group_xlat(void)
+{
+    static const struct {
+        uint8_t a16, len, b[8];
+    } seqs[] = {
+        { 0, SEQ(0xd7) },
+        { 0, SEQ(0x26, 0xd7) },
+        { 0, SEQ(0x2e, 0xd7) },
+        { 0, SEQ(0x66, 0xb9, 0x00, 0x00, 0x8e, 0xe1, 0x64, 0xd7) }, /* fs = 0; fs: xlat */
+        { 1, SEQ(0x67, 0xd7) },
+    };
+    const char    *name = "xlat";
+    struct variant v    = { .group = name, .faults_ok = 1, .fix_input = fix_xlat2, .reg_fix = 1 };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.arg2       = seqs[i].a16;
+        v.norm       = seqs[i].a16 ? 0 : 1 << R_EBX;
+        run_plain(&v, 3);
+    }
+    group_end(name);
+}
