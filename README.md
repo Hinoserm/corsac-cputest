@@ -192,6 +192,7 @@ goes into the group that already covers it, not into a group of its own.
 | 276 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
 | 277 | `syscall` | fast system calls: SYSENTER/SYSEXIT/SYSCALL/SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 3 with nothing set up; AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3; Intel SYSENTER/SYSEXIT (Pentium II on) through MSRs 174h-176h, CS MSR 0 and 4, SYSEXIT outside ring 0 |
 | 278 | `mp.table` | the processors and I/O APICs the BIOS lists: MP floating pointer and configuration table (1.1/1.4), an MP default configuration, or the ACPI MADT; status (bad checksum, length, entry, extended checksum...), counts, spec revision, IMCR. The board's answer: no reference, never a stop; a bad table only turns off what needs it |
+| 279 | `apic.regs` | the boot processor's local APIC, registers only: version, TPR/LDR/DFR/SVR/divider/LVT write masks, software disable forcing and holding the LVT masks, the timer counting down and stopping at 0, the error register after an illegal self-IPI vector (read the P5 or P6 way); the BIOS's settings put back |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
