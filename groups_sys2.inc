@@ -302,3 +302,33 @@ group_pg_rmw(void)
     }
     pg_run_seqs("pg.rmw", seqs, sizeof(seqs) / sizeof(seqs[0]), CR0_WP);
 }
+
+/* ---- the page directory entry's own bits --------------------------------------------------- */
+
+/* The alias page at 1 GB onto the buffer's second page, through a PDE
+   made read-only or not present (CR0.WP): reads and writes, #PF with CR2
+   in the alias area, and the PDE and PTE read back (A in both, D only in
+   the PTE). */
+#define RD_ALIAS  0xa1, 0x18, ALIAS                   /* mov eax, [40000018h] */
+#define WR_ALIAS  0x89, 0x0d, 0x18, ALIAS             /* mov [40000018h], ecx */
+#define GET_PDE   0x8b, 0x35, 0x00, 0x04, 0x20, 0x00  /* mov esi, [PG_DIR + 400h] */
+#define GET_APTE  0x8b, 0x3d, 0x00, 0x10, 0x24, 0x00  /* mov edi, [PG_ALIAS] */
+
+static void
+group_pg_pde(void)
+{
+    static const struct pg_seq seqs[] = {
+        { 128, 1, SEQ(RD_ALIAS, GET_PDE, GET_APTE), 0 },
+        { 128, 1, SEQ(WR_ALIAS, GET_PDE, GET_APTE), 0 },
+        { 128, 1, SEQ(RD_ALIAS, GET_PDE), 256 },      /* PDE read-only: reads work */
+        { 128, 1, SEQ(WR_ALIAS), 256 },               /* writes don't */
+        { 128, 1, SEQ(RD_ALIAS), 512 },               /* PDE not present */
+        { 128, 1, SEQ(WR_ALIAS), 512 },
+        { 0, 1, SEQ(RD_ALIAS, GET_PDE), 0 },          /* PDE present, PTE not */
+    };
+    if (!g_cpu.is486) {
+        group_skip("pg.pde", "386 (no CR0.WP)");
+        return;
+    }
+    pg_run_seqs("pg.pde", seqs, sizeof(seqs) / sizeof(seqs[0]), CR0_WP);
+}
