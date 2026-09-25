@@ -5,7 +5,9 @@ code16_limit(const char *name)
 {
     static const struct {
         uint8_t len, b[4];
-    } bodies[] = { { SEQ(0x01, 0xd1) }, { SEQ(0x90, 0x90, 0x90) }, { SEQ(0x66, 0x01, 0xd1) } };
+    } bodies[] = { { SEQ(0x01, 0xd1) }, { SEQ(0x90, 0x90, 0x90) }, { SEQ(0x66, 0x01, 0xd1) },
+                   /* two-byte forms an interpreter's length guess got wrong at the limit */
+                   { SEQ(0x04, 0x05) }, { SEQ(0x3c, 0x00) }, { SEQ(0x0f, 0xa2) } };
     struct variant v = { .group = name, .code16 = 1, .faults_ok = 1 };
     for (unsigned i = 0; i < sizeof(bodies) / sizeof(bodies[0]); i++) {
         for (int over = 0; over < 3; over++) {

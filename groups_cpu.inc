@@ -202,6 +202,63 @@ msrw_after(const struct variant *v)
 #endif
 }
 
+/* A Pentium (family 5) has no BIOS update signature MSR: WRMSR 8Bh is
+   #GP (Vista writes it). EFER on the K6 family: bits 1-4 hold (DPE, EWBEC
+   ...) on the K6-2+ and K6-III+, anything from bit 5 up is #GP; EFER is
+   put back after each run. */
+static uint32_t g_efer_saved RING_UNUSED;
+
+static void
+efer_before(const struct variant *v)
+{
+#ifndef HOSTTEST
+    g_efer_saved = rdmsr_lo(MSR_EFER);
+#endif
+}
+
+static void
+efer_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    wrmsr_(MSR_EFER, g_efer_saved, 0);
+#endif
+}
+
+static void
+msr_write_p5_k6(const char *name)
+{
+    struct variant v = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+    unsigned       family = (g_cpu.signature >> 8) & 0xf;
+    if (is_vendor("GenuineIntel") && family == 5) {
+        static const uint8_t b[] = { 0xb9, 0x8b, 0x00, 0x00, 0x00, 0x31, 0xc0, 0x31, 0xd2, 0x0f, 0x30 };
+        memcpy(v.target, b, sizeof(b));
+        v.target_len = sizeof(b);
+        run_plain(&v, 1);
+    }
+    if (is_vendor("AuthenticAMD") && family == 5 && (g_cpu.ext_features & EXT_SYSCALL)) {
+        static const uint32_t vals[] = { 0x1e, 0x20, 0x80000000u };
+        v.before_run = efer_before;
+        v.after_run  = efer_after;
+        for (unsigned i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
+            int n = 0; /* mov ecx, EFER; mov eax, value; xor edx, edx; wrmsr; rdmsr */
+            v.target[n++] = 0xb9;
+            put_le(v.target + n, MSR_EFER, 4);
+            n += 4;
+            v.target[n++] = 0xb8;
+            put_le(v.target + n, vals[i], 4);
+            n += 4;
+            v.target[n++] = 0x31;
+            v.target[n++] = 0xd2;
+            v.target[n++] = 0x0f;
+            v.target[n++] = 0x30;
+            v.target[n++] = 0x0f;
+            v.target[n++] = 0x32;
+            v.target_len  = n;
+            run_plain(&v, 1);
+        }
+    }
+}
+
 static void
 msr_write_p6(const char *name)
 {
@@ -266,6 +323,7 @@ group_tsc_write(void)
     run_plain(&v, 1);
     tsc_rdmsr(name);
     msr_write_p6(name);
+    msr_write_p5_k6(name);
     group_end(name);
 }
 
@@ -275,7 +333,11 @@ group_tsc_write(void)
 static void
 group_cyrix(void)
 {
-    static const uint8_t regs[] = { 0xfe, 0xff, 0xc0, 0xc1, 0xc2, 0xc3 };
+    static const uint8_t regs[] = { 0xfe, 0xff, 0xc0, 0xc1, 0xc2, 0xc3,
+                                    /* indexes no model defines: what a read gives (the bus's FFh, or
+                                       whatever the chip keeps); 86Box once stopped on them */
+                                    0xe4, 0xe5, 0xe6, 0xe7, 0xec, 0xed, 0xee, 0xef, 0xf1, 0xf3, 0xf4, 0xf5,
+                                    0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd };
     const char          *name   = "cyrix.dir";
     struct variant       v      = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_arg3 };
     if (!g_cpu.cyrix) {
