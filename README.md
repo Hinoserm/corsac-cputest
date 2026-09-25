@@ -124,6 +124,7 @@ between versions until the group itself changes.
 | 225 | `r1.popf` | POPF at CPL 1 |
 | 226 | `r1.seg` | segment loads at CPL 1: data of DPL 1-3, SS only DPL 1, RPL raising the check; a JMP to ring 3 code |
 | 227 | `r1.gates` | call gates, conforming code and forbidden transfers from ring 1 |
+| 228 | `r1.int` | software interrupts from ring 1: the DPL-1 gate is allowed, DPL 0 not |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
