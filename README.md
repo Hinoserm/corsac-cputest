@@ -184,6 +184,7 @@ between versions until the group itself changes.
 | 285 | `seg.types` | each of the 16 code/data types at DPL 0 from ring 0 and DPL 3 from ring 3: VERR, VERW, a load into FS, a read and a write |
 | 286 | `idt.types` | INT through a not-present gate, a gate of type 0, a 386 trap gate, gates with a data or null selector, from rings 0 and 3 |
 | 287 | `idt.limit` | INT past a shortened IDT's limit, and to a gate only half inside it (#GP with the IDT bit), from rings 0 and 3 |
+| 288 | `code16.limit` | 16-bit code running up to the end of its 64 KB segment, and one or two bytes past it (#GP) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

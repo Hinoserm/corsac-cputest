@@ -547,3 +547,31 @@ group_idt_limit(void)
     }
     ring_end(v.group, 0, 0);
 }
+
+/* ---- the end of a 16-bit code segment, and prefixes inside one ----------------------------- */
+
+/* 16-bit code placed so its last byte is the segment's last (FFFFh), or
+   one byte past it: running off the end is #GP. */
+static void
+group_code16_limit(void)
+{
+    static const struct {
+        uint8_t len, b[4];
+    } bodies[] = { { SEQ(0x01, 0xd1) }, { SEQ(0x90, 0x90, 0x90) }, { SEQ(0x66, 0x01, 0xd1) } };
+    const char    *name = "code16.limit";
+    struct variant v    = { .group = name, .code16 = 1, .faults_ok = 1 };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(bodies) / sizeof(bodies[0]); i++) {
+        for (int over = 0; over < 3; over++) {
+            memcpy(v.target, bodies[i].b, bodies[i].len);
+            v.target_len = bodies[i].len;
+            /* the body plus the final o32 RETF (2 bytes), and no producer */
+            v.code16_ip = (uint16_t) (0x10000 - (bodies[i].len + 2) + over);
+            v.producer  = 0;
+            v.boundary  = 0;
+            run_inputs(&v, 1);
+        }
+    }
+    v.code16_ip = 0;
+    group_end(name);
+}
