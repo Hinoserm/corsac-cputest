@@ -1312,6 +1312,38 @@ emit_far(struct emit *e, const struct variant *v)
 }
 
 static void
+emit_retf_data(struct emit *e, const struct variant *v)
+{
+    if (v->arg2) { /* RETF 8: eight bytes for it to drop */
+        e8(e, 0x6a);
+        e8(e, 0x00);
+        e8(e, 0x6a);
+        e8(e, 0x00);
+    }
+    e8(e, 0x6a); /* push 10h */
+    e8(e, 0x10);
+    e8(e, 0x68); /* push landing */
+    uint8_t *l = e->p;
+    e32(e, 0);
+    if (v->arg2) {
+        e8(e, 0xca); /* retf 8 */
+        e8(e, 0x08);
+        e8(e, 0x00);
+    } else
+        e8(e, 0xcb); /* retf */
+    put_le(l, (uint32_t) e->p, 4);
+    e8(e, 0x66); /* landing: mov si, cs */
+    e8(e, 0x8c);
+    e8(e, 0xce);
+    e8(e, 0xea); /* jmp far 08h:back */
+    uint8_t *b = e->p;
+    e32(e, 0);
+    e8(e, 0x08);
+    e8(e, 0x00);
+    put_le(b, (uint32_t) e->p, 4);
+}
+
+static void
 group_far(void)
 {
     static const struct {
@@ -1327,15 +1359,15 @@ group_far(void)
         v.arg2       = k;
         run_plain(&v, 1);
     }
-    /* RETF to a data segment at the same CPL (flat data, 10h): #GP(10h),
-       with and without a stack adjustment. */
-    static const struct {
-        uint8_t len, b[8];
-    } data_cs[] = { { SEQ(0x6a, 0x10, 0x6a, 0x00, 0xcb) }, { SEQ(0x6a, 0x10, 0x6a, 0x00, 0xca, 0x08, 0x00) } };
-    struct variant w = { .group = name, .faults_ok = 1 };
+    /* RETF and RETF 8 to a data segment (flat data, 10h) at the same CPL:
+       #GP(10h). 86Box accepts it on purpose (MS LINK), so the offset is a
+       landing in the test that records CS (ESI) and far-jumps back to 08h:
+       either outcome comes back cleanly. */
+    struct variant w = { .group = name, .faults_ok = 1, .emit = emit_retf_data };
     for (int k = 0; k < 2; k++) {
-        memcpy(w.target, data_cs[k].b, data_cs[k].len);
-        w.target_len = data_cs[k].len;
+        w.target[0]  = k ? 0xca : 0xcb; /* for the reports */
+        w.target_len = 1;
+        w.arg2       = k;
         run_plain(&w, 1);
     }
     group_end(name);
