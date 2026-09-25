@@ -148,8 +148,9 @@ def main():
             if len(text) > shown:
                 print(text[shown:], end="", flush=True)
                 shown = len(text)
-            if "DONE tests=" in text and text.rstrip().endswith(("PASS", "FAIL")):
-                result = 0 if text.rstrip().endswith("PASS") else 1
+            done = [l for l in text.splitlines() if l.startswith("DONE ") and l.rstrip().endswith(("PASS", "FAIL"))]
+            if done:  # the ROM loops; the first pass is the answer
+                result = 0 if done[0].rstrip().endswith("PASS") else 1
                 break
             if b.box.poll() is not None:
                 print("\nemulator exited (%s)" % b.box.returncode)

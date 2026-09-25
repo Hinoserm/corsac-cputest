@@ -374,6 +374,7 @@ static int g_skip;
 static int      g_counting;
 static uint32_t g_expected;
 static int      g_group_no, g_group_count;
+static uint32_t g_pass;
 static const char *g_group_name;
 static void status(void);
 
@@ -771,7 +772,7 @@ run_variant(const struct variant *v)
     }
 
     g_stats.tests++;
-    if ((g_stats.tests & 255) == 0 || g_stats.tests == g_expected)
+    if ((g_stats.tests & 15) == 0 || g_stats.tests == g_expected)
         status();
     if (out[0].fault != 0xff)
         g_stats.faults++;
@@ -860,8 +861,33 @@ run_variant(const struct variant *v)
 
 static uint8_t g_group_post;
 
-/* The top line of the screen, redrawn in place; COM1 gets a line every
-   2048 tests. */
+/* Every 3 seconds by the CMOS clock's seconds register, read with
+   interrupts off (no timer interrupt runs, and RDTSC is missing on the
+   486s this also tests). Called every 16 tests. */
+static int
+progress_due(void)
+{
+#ifdef HOSTTEST
+    return 0;
+#else
+    static uint8_t last = 0xff;
+    static int     seconds;
+    uint8_t        now = cmos_read(0x00);
+    if (last == 0xff)
+        last = now;
+    if (now != last) {
+        last = now;
+        if (++seconds >= 3) {
+            seconds = 0;
+            return 1;
+        }
+    }
+    return 0;
+#endif
+}
+
+/* The top line of the screen, redrawn in place every 16 tests; COM1 gets a
+   PROGRESS line every 3 seconds. */
 static void
 status(void)
 {
@@ -870,7 +896,16 @@ status(void)
     int      n    = 0;
     uint32_t done = g_stats.tests, left = g_expected - g_stats.tests;
     const char *p;
-    for (p = "RUNNING group "; *p; p++)
+    for (p = "PASS "; *p; p++)
+        line[n++] = *p;
+    {
+        char     pn[12];
+        int      pk = 0;
+        uint32_t pv = g_pass;
+        do { pn[pk++] = '0' + pv % 10; pv /= 10; } while (pv);
+        while (pk) line[n++] = pn[--pk];
+    }
+    for (p = "  group "; *p; p++)
         line[n++] = *p;
     line[n++] = '0' + g_group_no;
     line[n++] = '/';
@@ -895,7 +930,7 @@ status(void)
     for (int i = 0; i < 80; i++)
         VGA[i] = 0x1f00 | (uint8_t) line[i]; /* white on blue */
 #endif
-    if ((g_stats.tests & 2047) == 0 || g_stats.tests == g_expected) {
+    if (progress_due() || g_stats.tests == g_expected) {
         vga_quiet = 1;
         puts_("PROGRESS ");
         puts_(g_group_name);
@@ -990,14 +1025,26 @@ cmain(uint32_t rom_base)
         puts_(g_cpu.is486 ? "486-no-cpuid" : "386");
     puts_("\n");
 
-    run_groups();
+    /* The ROM and the disk image go round again when they finish, for
+       soaking a machine; every pass must print the same CRCs. The host
+       build runs once. */
+    for (g_pass = 1;; g_pass++) {
+        g_total_tests = g_total_mismatches = 0;
+        g_group_post = 0;
+        run_groups();
 
-    puts_("DONE tests=");
-    putdec(g_total_tests);
-    puts_(" mismatches=");
-    putdec(g_total_mismatches);
-    puts_(" arena_wraps=");
-    putdec(g_arena_wraps);
-    puts_(g_total_mismatches ? " FAIL\n" : " PASS\n");
-    post(g_total_mismatches ? 0xee : 0xaa);
+        puts_("DONE pass=");
+        putdec(g_pass);
+        puts_(" tests=");
+        putdec(g_total_tests);
+        puts_(" mismatches=");
+        putdec(g_total_mismatches);
+        puts_(" arena_wraps=");
+        putdec(g_arena_wraps);
+        puts_(g_total_mismatches ? " FAIL\n" : " PASS\n");
+        post(g_total_mismatches ? 0xee : 0xaa);
+#ifdef HOSTTEST
+        break;
+#endif
+    }
 }
