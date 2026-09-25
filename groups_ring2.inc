@@ -105,10 +105,53 @@ group_r2_limits(void)
     limits_run("r2.limits", 2, 0);
 }
 
+/* Operands that straddle a segment limit must #GP whatever the
+   instruction does with them; 86Box checked only some of them. FS the
+   scratch descriptor as byte-granular read/write data with limit FFFh
+   (DPL 1: these run at CPL 1), each operand from FFAh-FFEh on:
+   rotates and shifts by 0 (count 0 still checks), by CL=0 and by 1; BT
+   with an immediate, BT and BTS with a register bit offset past the
+   limit; MOVQ in and out, MOVD, PADDB (MMX); CMPXCHG8B (CX8); and a MOV
+   just inside the limit. */
+static void
+limits_ops(const char *name)
+{
+    static const struct {
+        uint8_t need, len, b[20];
+    } seqs[] = {
+        { 0, SEQ(0xbb, 0xfc, 0x0f, 0x00, 0x00, 0x64, 0x8b, 0x03) },                               /* mov eax, fs:[ffc]: inside */
+        { 0, SEQ(0xbb, 0xfd, 0x0f, 0x00, 0x00, 0x64, 0xc1, 0x03, 0x00) },                         /* rol dword fs:[ffd], 0 */
+        { 0, SEQ(0xbb, 0xfd, 0x0f, 0x00, 0x00, 0x31, 0xc9, 0x64, 0xd3, 0x23) },                   /* shl dword fs:[ffd], cl=0 */
+        { 0, SEQ(0xbb, 0xfd, 0x0f, 0x00, 0x00, 0x64, 0xd1, 0x03) },                               /* rol dword fs:[ffd], 1 */
+        { 0, SEQ(0xbb, 0xfe, 0x0f, 0x00, 0x00, 0x64, 0x0f, 0xba, 0x23, 0x1f) },                   /* bt dword fs:[ffe], 31 */
+        { 0, SEQ(0xbb, 0xfc, 0x0f, 0x00, 0x00, 0xba, 0x20, 0x00, 0x00, 0x00, 0x64, 0x0f, 0xa3, 0x13) }, /* bt fs:[ffc], edx=32 */
+        { 0, SEQ(0xbb, 0xfc, 0x0f, 0x00, 0x00, 0xba, 0x20, 0x00, 0x00, 0x00, 0x64, 0x0f, 0xab, 0x13) }, /* bts: nothing written */
+        { 1, SEQ(0xbb, 0xfa, 0x0f, 0x00, 0x00, 0x64, 0x0f, 0x6f, 0x03, 0x0f, 0x77) },             /* movq mm0, fs:[ffa]; emms */
+        { 1, SEQ(0xbb, 0xfa, 0x0f, 0x00, 0x00, 0x64, 0x0f, 0x7f, 0x03, 0x0f, 0x77) },             /* movq fs:[ffa], mm0 */
+        { 1, SEQ(0xbb, 0xfd, 0x0f, 0x00, 0x00, 0x64, 0x0f, 0x6e, 0x03, 0x0f, 0x77) },             /* movd mm0, fs:[ffd] */
+        { 1, SEQ(0xbb, 0xfa, 0x0f, 0x00, 0x00, 0x64, 0x0f, 0xfc, 0x03, 0x0f, 0x77) },             /* paddb mm0, fs:[ffa] */
+        { 2, SEQ(0xbb, 0xfa, 0x0f, 0x00, 0x00, 0x64, 0x0f, 0xc7, 0x0b) },                         /* cmpxchg8b fs:[ffa] */
+    };
+    struct variant v = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                         .fix_input = fix_ring, .arg2 = RF_SANDBOX, .fx = FX_CUSTOM, .defmask = dm_fxarg,
+                         .fx_arg = 1, .ring = 1, .arg = SCRATCH_RAW(0xb2, 0x4) };
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        if ((seqs[i].need == 1 && !(g_cpu.features & CPUID_MMX)) || (seqs[i].need == 2 && !(g_cpu.features & (1u << 8))))
+            continue;
+        int n = 0;
+        static const uint8_t fs[] = { 0x66, 0xb8, SEL_SCRATCH | 1, 0x00, 0x8e, 0xe0 }; /* mov fs, scratch */
+        memcpy(v.target, fs, sizeof(fs));
+        n = sizeof(fs);
+        memcpy(v.target + n, seqs[i].b, seqs[i].len);
+        v.target_len = n + seqs[i].len;
+        run_plain(&v, 1);
+    }
+}
+
 static void
 group_r1_limits(void)
 {
-    limits_run("r1.limits", 1, 0);
+    limits_run("r1.limits", 1, limits_ops);
 }
 
 /* SS on the scratch descriptors, then a push and a pop at stack pointers

@@ -158,7 +158,7 @@ goes into the group that already covers it, not into a group of its own.
 | 242 | `v86.vme` | VME: CLI/STI on VIF, PUSHF/POPF with VIF, INT 60h redirected through the V86 vector table or faulting; CR4.PVI at CPL 3: CLI/STI on VIF, STI with VIP #GP, POPFD leaves IF and VIF, IOPL 3 and rings 1-2 unaffected |
 | 243 | `r3.limits` | FS on read/write, read-only, expand-down (32 and 16-bit), execute/read and execute-only code, page-granular, DPL-1 and missing descriptors at CPL 3, accessed either side of the limit; each of the 16 code/data types at DPL 0 from ring 0 and DPL 3 from ring 3: VERR, VERW, FS load, read and write |
 | 244 | `r2.limits` | the same at CPL 2 |
-| 245 | `r1.limits` | the same at CPL 1 |
+| 245 | `r1.limits` | the same at CPL 1; operands straddling a byte-granular FS limit must #GP whatever the instruction: shifts and rotates by 0 and CL=0, BT/BTS with register and immediate offsets, MOVQ/MOVD/PADDB (MMX), CMPXCHG8B |
 | 246 | `r3.ss` | SS on those descriptors at CPL 3, a push and pop either side of the limit: #SS, #GP, expand-down and 16-bit stacks |
 | 247 | `r1.ss` | the same at CPL 1 |
 | 248 | `conforming` | far calls to conforming code of DPL 0, 1 and 3 from rings 1-3: runs at the caller's CPL, or #GP |
