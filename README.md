@@ -199,6 +199,7 @@ between versions until the group itself changes.
 | 300 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
 | 301 | `string.segs` | segment overrides move the string source, never ES:EDI; null ES; REP with ECX 0 checks nothing; REP STOS past ES's limit |
 | 302 | `iret.frames` | IRETD at CPL 0 through bad frames: null, data, RPL-0 and out-of-GDT CS; null, mismatched, DPL-0, read-only, not-present and TSS SS; DS/ES/FS nulled on the way out |
+| 303 | `sysops.ud` | SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 0 and 3 with nothing set up |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

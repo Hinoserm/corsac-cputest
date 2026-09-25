@@ -646,3 +646,43 @@ group_iret_frames(void)
     }
     ring_end(v.group, 0, 0);
 }
+
+/* ---- the fast system-call opcodes where they aren't ---------------------------------------------------------- */
+
+/* SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM outside SMM, GETSEC, 0F FF,
+   UD1, and MOV from TR6 (a 486 and Cyrix test register), at CPL 0 and 3,
+   with nothing set up: which of them a model knows (#GP) and which it
+   doesn't (#UD). A variant that could really run is left out: SYSENTER
+   and SYSEXIT where the SYSENTER CS MSR is set, SYSCALL and SYSRET where
+   EFER.SCE is. */
+static void
+group_sysops_ud(void)
+{
+    static const struct {
+        uint8_t kind, len, b[3];
+    } ops[] = {
+        { 1, SEQ(0x0f, 0x34) }, { 1, SEQ(0x0f, 0x35) }, { 2, SEQ(0x0f, 0x05) }, { 2, SEQ(0x0f, 0x07) },
+        { 0, SEQ(0x0f, 0xaa) }, { 0, SEQ(0x0f, 0x37) }, { 0, SEQ(0x0f, 0xff) }, { 0, SEQ(0x0f, 0xb9, 0xc0) },
+        { 0, SEQ(0x0f, 0x24, 0xf0) },
+    };
+    static struct ring_seq seqs[2 * sizeof(ops) / sizeof(ops[0])];
+    unsigned               n = 0;
+    int                    sep_set = 0, sce_set = 0;
+#ifndef HOSTTEST
+    unsigned family = (g_cpu.signature >> 8) & 0xf, model = (g_cpu.signature >> 4) & 0xf;
+    if (is_vendor("GenuineIntel") && family == 6 && model >= 3)
+        sep_set = rdmsr_lo(0x174) != 0;
+    if (is_vendor("AuthenticAMD") && (g_cpu.ext_features & EXT_SYSCALL))
+        sce_set = rdmsr_lo(MSR_EFER) & 1;
+#endif
+    for (int r = 0; r <= 3; r += 3) {
+        for (unsigned i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
+            if ((ops[i].kind == 1 && sep_set) || (ops[i].kind == 2 && sce_set))
+                continue;
+            struct ring_seq q = { r, 0, 0, 0, RF_NONE, 1, ops[i].len, { 0 } };
+            memcpy(q.b, ops[i].b, ops[i].len);
+            seqs[n++] = q;
+        }
+    }
+    ring_run("sysops.ud", seqs, n, 0, 0, 0);
+}

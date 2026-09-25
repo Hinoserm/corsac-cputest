@@ -545,6 +545,7 @@ static const struct group_def groups[] = {
     G(group_cyrix_emmi),
     G(group_string_segs),
     G(group_iret_frames),
+    G(group_sysops_ud),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
