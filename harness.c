@@ -1444,6 +1444,8 @@ emit_ring_regs(struct emit *e, int v86)
    AC from ring_flags), load the registers, run the producer and the
    target, and INT 30h back; the registers come back through the fault
    path, and a fault on the way is the result instead. */
+static uint8_t *g_ring_iret; /* the harness's IRETD into the ring, to tell its faults from the test's */
+
 static void
 emit_ring(struct emit *e, const struct variant *v)
 {
@@ -1462,8 +1464,8 @@ emit_ring(struct emit *e, const struct variant *v)
         e8(e, 0x68); /* ESP */
         e32(e, V86_STACK);
     } else {
-        e8(e, 0x6a); /* SS */
-        e8(e, data_sel[v->ring]);
+        e8(e, 0x68); /* SS: a dword, as push imm8 would sign-extend C3h to FFC3h */
+        e32(e, data_sel[v->ring]);
         e8(e, 0x68); /* ESP */
         e32(e, (uint32_t) g_rstack[v->ring] + sizeof(g_rstack[0]));
     }
@@ -1484,12 +1486,13 @@ emit_ring(struct emit *e, const struct variant *v)
         e8(e, 0x68); /* IP */
         e32(e, 0);
     } else {
-        e8(e, 0x6a); /* CS */
-        e8(e, v->code16 ? code16_sel[v->ring] : code_sel[v->ring]);
+        e8(e, 0x68); /* CS */
+        e32(e, v->code16 ? code16_sel[v->ring] : code_sel[v->ring]);
         e8(e, 0x68); /* EIP: just after the IRETD (0 in a 16-bit segment based there) */
         push_l = e->p;
         e32(e, 0);
     }
+    g_ring_iret = e->p;
     e8(e, 0xcf); /* iretd */
     if (v86) {
         struct emit c = { low };
@@ -1675,6 +1678,10 @@ run_variant(const struct variant *v)
         if (v->after_run)
             v->after_run(v);
         capture(v, &out[r], slot, vec, mem);
+#ifndef HOSTTEST
+        if (v->ring && vec != 0xff && g_fault.eip == (uint32_t) g_ring_iret)
+            harness_fault(); /* the way in failed: no test ran */
+#endif
 #ifndef HOSTTEST
         if (v->debug && vec == 0xff) {
             uint32_t dr6;
