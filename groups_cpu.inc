@@ -170,10 +170,12 @@ tsc_rdmsr(const char *name)
 /* On a P6 (Intel family 6): WRMSR to the read-only MTRRcap (FEh) and
    MCG_CAP (179h) and to the LBR MSR 1DBh is #GP, and so is a variable
    MTRR with a reserved memory type (2); PerfCtr0 (C1h) takes the low 32
-   bits of what is written and sign-extends them to 40. MTRR 0, PerfCtr0
-   and EvtSel0 (stopped, so the counter holds still) are saved before each
-   run and put back after. */
-static uint32_t g_msrw_saved[6] RING_UNUSED;
+   bits of what is written and sign-extends them to 40; where CPUID
+   reports PAT (Pentium II Deschutes), PAT with a reserved memory type (2)
+   is #GP. MTRR 0, PerfCtr0, EvtSel0 (stopped, so the counter holds
+   still) and PAT are saved before each run and put back after. */
+#define CPUID_PAT (1u << 16)
+static uint32_t g_msrw_saved[8] RING_UNUSED;
 
 static void
 msrw_before(const struct variant *v)
@@ -182,6 +184,8 @@ msrw_before(const struct variant *v)
     static const uint32_t msrs[3] = { 0x200, 0xc1, 0x186 };
     for (int i = 0; i < 3; i++)
         __asm__ volatile("rdmsr" : "=a"(g_msrw_saved[2 * i]), "=d"(g_msrw_saved[2 * i + 1]) : "c"(msrs[i]));
+    if (g_cpu.features & CPUID_PAT)
+        __asm__ volatile("rdmsr" : "=a"(g_msrw_saved[6]), "=d"(g_msrw_saved[7]) : "c"(0x277));
     wrmsr_(0x186, 0, 0);
 #endif
 }
@@ -193,6 +197,8 @@ msrw_after(const struct variant *v)
     static const uint32_t msrs[3] = { 0x200, 0xc1, 0x186 };
     for (int i = 0; i < 3; i++)
         wrmsr_(msrs[i], g_msrw_saved[2 * i], g_msrw_saved[2 * i + 1]);
+    if (g_cpu.features & CPUID_PAT)
+        wrmsr_(0x277, g_msrw_saved[6], g_msrw_saved[7]);
 #endif
 }
 
@@ -219,6 +225,13 @@ msr_write_p6(const char *name)
     for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
         memcpy(v.target, seqs[i].b, seqs[i].len);
         v.target_len = seqs[i].len;
+        run_plain(&v, 1);
+    }
+    if (g_cpu.features & CPUID_PAT) {
+        static const uint8_t pat[] = { 0xb9, 0x77, 0x02, 0x00, 0x00, 0xb8, 0x02, 0x00, 0x00, 0x00, 0x31, 0xd2,
+                                       0x0f, 0x30 }; /* PAT entry 0 = 2: reserved */
+        memcpy(v.target, pat, sizeof(pat));
+        v.target_len = sizeof(pat);
         run_plain(&v, 1);
     }
 }

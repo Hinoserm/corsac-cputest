@@ -14,6 +14,22 @@ tests run. The test turns the CPU's cache on (clears CR0.CD and NW) if it
 was off: 86Box doesn't compile code while it is, so the recompiler would
 never be tested.
 
+## CPUs
+
+Everything common runs everywhere; the parts a model hasn't got are
+skipped by CPUID (or the Cyrix 5/2 test), never assumed. The model-specific
+parts cover every CPU 86Box has from the Pentium up: the P54C and P55C
+and their OverDrives, the K5, K6, K6-2, K6-III and their + parts, the
+Cyrix 6x86, 6x86MX and MII, the IDT WinChip and WinChip 2, the VIA
+Cyrix III, and the P6 family: the Pentium Pro, Pentium II Klamath and
+Deschutes, Celeron, Pentium II Xeon and the Pentium II OverDrive. For the
+P6 that means SYSENTER/SYSEXIT (and their absence on the Pentium Pro),
+the P6 MSRs and what WRMSR refuses, PAE paging, global pages, branch
+single-step and last-branch recording, performance counters that count,
+FXSAVE/FXRSTOR, CMOV and the local APIC's version. Tests for a quirk of
+one model go into the group that covers the instruction, not a group of
+their own.
+
 ## Running it on real hardware
 
 ```
