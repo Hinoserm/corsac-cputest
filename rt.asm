@@ -12,6 +12,7 @@ global  isr_table
 global  g_saved_esp
 global  g_fault
 global  gdt
+global  isr_48
 
 section .text.entry
 _start:
@@ -57,6 +58,11 @@ run_kernel:
         call    eax
 kernel_return:
         cld
+        mov     ax, 0x10                ; a ring or V86 test may have left others
+        mov     ds, ax
+        mov     es, ax
+        mov     fs, ax
+        mov     gs, ax
         popad
         mov     eax, [g_fault + FAULT_VEC]
         ret
@@ -107,11 +113,15 @@ ISR_NOERR 28
 ISR_NOERR 29
 ISR_NOERR 30
 ISR_NOERR 31
+ISR_NOERR 48                            ; INT 30h: the way back from rings 1-3 and V86
 
 ; Frame: [vec] [err] [eip] [cs] [eflags]. Record the registers as the
 ; fault left them, then unwind to run_kernel's caller.
 isr_common:
         pushad                          ; edi esi ebp esp ebx edx ecx eax
+        mov     ax, 0x10                ; from V86, DS and ES arrive null
+        mov     ds, ax
+        mov     es, ax
         mov     eax, [esp + 28]
         mov     [g_fault + FAULT_EAX], eax
         mov     eax, [esp + 24]

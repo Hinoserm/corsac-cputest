@@ -425,6 +425,12 @@ e32(struct emit *e, uint32_t v)
 }
 
 static void
+put32_at(uint8_t *p, uint32_t v)
+{
+    memcpy(p, &v, 4);
+}
+
+static void
 ebytes(struct emit *e, const uint8_t *b, int n)
 {
     while (n--)
@@ -572,6 +578,8 @@ struct variant {
     uint8_t       mmx;           /* MM0-MM7 loaded from g_mmx_in, stored to g_mmx_out */
     uint8_t       code16;        /* producer and target run in a 16-bit code segment */
     uint8_t       paging;        /* #PF: fault_err = error code | (CR2 - buffer) << 8 */
+    uint8_t       ring;          /* 1-3: run at that CPL; 4: in V86 mode (see ring_env_on()) */
+    uint32_t      ring_flags;    /* EFLAGS bits the entry IRET adds: IOPL, AC */
     void        (*before_run)(const struct variant *v); /* before each of the four runs */
     void        (*emit)(struct emit *e, const struct variant *v); /* instead of target[] */
     defmask_fn    defmask;
@@ -735,6 +743,184 @@ static uint8_t gdt[0x28];
 extern uint8_t gdt[];
 #endif
 
+/* ---- rings 1-3 and V86 ------------------------------------------------------ */
+
+/* The ring groups run with their own GDT, IDT and TSS (ring_env_on/off),
+   so every other group sees the small GDT and IDT of rt.asm unchanged.
+   Selectors in the ring GDT: */
+#define SEL_CODE1   0x28
+#define SEL_DATA1   0x30
+#define SEL_CODE2   0x38
+#define SEL_DATA2   0x40
+#define SEL_CODE3   0x48
+#define SEL_DATA3   0x50
+#define SEL_TSS     0x58
+#define SEL_CONF0   0x60 /* conforming code, DPL 0 */
+#define SEL_GATE3   0x68 /* call gate, DPL 3, to ring 0 */
+#define SEL_GATE1   0x70 /* call gate, DPL 1, to ring 0 */
+#define SEL_GATE0   0x78 /* call gate, DPL 0, to ring 0 */
+#define SEL_GATE31  0x80 /* call gate, DPL 3, to ring 1 */
+#define SEL_GATE3P  0x88 /* call gate, DPL 3, to ring 0, two parameters */
+#define SEL_SCRATCH 0x90 /* a data descriptor tests rewrite */
+#define SEL_GATE21  0x98 /* call gate, DPL 2, to ring 1 */
+#define RING_GDT_N  20
+
+#define V86_BLOCK   0x8000u /* the V86 test's inputs, below 64 KB */
+#define V86_STACK   0x7f00u
+#define V86_ARENA   0x20000u
+#define V86_ARENA_END 0x80000u
+
+#ifdef HOSTTEST
+#    define RING_UNUSED __attribute__((unused))
+#else
+#    define RING_UNUSED
+#endif
+static uint32_t g_gdt2[RING_GDT_N * 2] __attribute__((aligned(8))) RING_UNUSED;
+static uint32_t g_idt2[64 * 2] __attribute__((aligned(8))) RING_UNUSED;
+/* The TSS: 104 bytes, the VME interrupt redirection bitmap (32 bytes),
+   the I/O permission bitmap (8 KB) and its terminating FFh. */
+#define TSS_IOMAP 136
+static uint8_t  g_tss[TSS_IOMAP + 8192 + 1] __attribute__((aligned(16))) RING_UNUSED;
+static uint8_t  g_rstack[4][1024] __attribute__((aligned(16))); /* rings 0 (faults) to 3 */
+static int      g_tr_loaded RING_UNUSED;
+
+/* Where the call gates go: MOV ESI, CS (the CPL they run at, in its RPL)
+   and back; the two-parameter one also takes the first parameter into
+   EDI and drops both. */
+static uint8_t g_gate_ret[] RING_UNUSED = { 0x8c, 0xce, 0xcb };                               /* mov esi, cs; retf */
+/* For the gates into ring 1: also ESP and SS there, to show the stack
+   switch (or its absence). */
+static uint8_t g_gate_retsp[] RING_UNUSED = { 0x8c, 0xce, 0x89, 0xe7, 0x8c, 0xd5, 0xcb }; /* mov esi, cs; mov edi, esp; mov ebp, ss; retf */
+static uint8_t g_gate_retp[] RING_UNUSED = { 0x8c, 0xce, 0x8b, 0x7c, 0x24, 0x0c, 0xca, 0x08, 0x00 }; /* ...; mov edi, [esp+12]; retf 8 */
+
+static void
+seg_desc(int sel, uint32_t base, uint32_t limit, uint8_t access, uint8_t flags)
+{
+    uint32_t *d = g_gdt2 + (sel >> 3) * 2;
+    d[0]        = (limit & 0xffff) | (base << 16);
+    d[1]        = ((base >> 16) & 0xff) | ((uint32_t) access << 8) | (limit & 0xf0000) | ((uint32_t) flags << 20) | (base & 0xff000000);
+}
+
+static void
+gate_desc(uint32_t *d, uint16_t sel, uint32_t off, uint8_t type, uint8_t params)
+{
+    d[0] = (off & 0xffff) | ((uint32_t) sel << 16);
+    d[1] = (off & 0xffff0000) | ((uint32_t) type << 8) | params;
+}
+
+#ifndef HOSTTEST
+extern uint32_t isr_table[32];
+extern void     isr_48(void);
+static struct {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed)) g_saved_gdtr, g_saved_idtr;
+
+static void
+ring_build(void)
+{
+    memset(g_gdt2, 0, sizeof(g_gdt2));
+    memcpy(g_gdt2, gdt, 0x28); /* null, the flat and 16-bit segments as before */
+    seg_desc(SEL_CODE1, 0, 0xfffff, 0xba, 0xc);
+    seg_desc(SEL_DATA1, 0, 0xfffff, 0xb2, 0xc);
+    seg_desc(SEL_CODE2, 0, 0xfffff, 0xda, 0xc);
+    seg_desc(SEL_DATA2, 0, 0xfffff, 0xd2, 0xc);
+    seg_desc(SEL_CODE3, 0, 0xfffff, 0xfa, 0xc);
+    seg_desc(SEL_DATA3, 0, 0xfffff, 0xf2, 0xc);
+    seg_desc(SEL_TSS, (uint32_t) g_tss, sizeof(g_tss) - 1, 0x89, 0);
+    seg_desc(SEL_CONF0, 0, 0xfffff, 0x9e, 0xc);
+    gate_desc(g_gdt2 + (SEL_GATE3 >> 3) * 2, 0x08, (uint32_t) g_gate_ret, 0xec, 0);
+    gate_desc(g_gdt2 + (SEL_GATE1 >> 3) * 2, 0x08, (uint32_t) g_gate_ret, 0xac, 0);
+    gate_desc(g_gdt2 + (SEL_GATE0 >> 3) * 2, 0x08, (uint32_t) g_gate_ret, 0x8c, 0);
+    gate_desc(g_gdt2 + (SEL_GATE31 >> 3) * 2, SEL_CODE1, (uint32_t) g_gate_retsp, 0xec, 0);
+    gate_desc(g_gdt2 + (SEL_GATE3P >> 3) * 2, 0x08, (uint32_t) g_gate_retp, 0xec, 2);
+    seg_desc(SEL_SCRATCH, 0, 0xfffff, 0xf2, 0xc);
+    gate_desc(g_gdt2 + (SEL_GATE21 >> 3) * 2, SEL_CODE1, (uint32_t) g_gate_retsp, 0xcc, 0);
+
+    memset(g_idt2, 0, sizeof(g_idt2));
+    for (int i = 0; i < 32; i++)
+        gate_desc(g_idt2 + i * 2, 0x08, isr_table[i], 0x8e, 0);
+    gate_desc(g_idt2 + 0x30 * 2, 0x08, (uint32_t) isr_48, 0xee, 0); /* DPL 3: the way back */
+    gate_desc(g_idt2 + 0x31 * 2, 0x08, (uint32_t) isr_48, 0x8e, 0); /* DPL 0 */
+    gate_desc(g_idt2 + 0x32 * 2, 0x08, (uint32_t) isr_48, 0xae, 0); /* DPL 1 */
+
+    memset(g_tss, 0, sizeof(g_tss));
+    *(uint32_t *) (g_tss + 4)   = (uint32_t) g_rstack[0] + sizeof(g_rstack[0]);
+    *(uint32_t *) (g_tss + 8)   = 0x10;
+    *(uint32_t *) (g_tss + 12)  = (uint32_t) g_rstack[1] + sizeof(g_rstack[1]);
+    *(uint32_t *) (g_tss + 16)  = SEL_DATA1 | 1;
+    *(uint32_t *) (g_tss + 20)  = (uint32_t) g_rstack[2] + sizeof(g_rstack[2]);
+    *(uint32_t *) (g_tss + 24)  = SEL_DATA2 | 2;
+    *(uint16_t *) (g_tss + 102) = TSS_IOMAP;
+    memset(g_tss + 104, 0xff, 32); /* VME: every INT n through the IDT unless a test says */
+    g_tss[sizeof(g_tss) - 1]    = 0xff;
+}
+
+/* Into the ring GDT and IDT (and the TSS, loaded once); CR4 and CR0 bits
+   as a group needs them. */
+static void
+ring_env_on(uint32_t cr4_set, uint32_t cr0_set)
+{
+    struct {
+        uint16_t limit;
+        uint32_t base;
+    } __attribute__((packed)) gdtr = { sizeof(g_gdt2) - 1, (uint32_t) g_gdt2 }, idtr = { sizeof(g_idt2) - 1, (uint32_t) g_idt2 };
+    ring_build();
+    __asm__ volatile("sgdt %0\n\tsidt %1" : "=m"(g_saved_gdtr), "=m"(g_saved_idtr));
+    __asm__ volatile("lgdt %0\n\tlidt %1" : : "m"(gdtr), "m"(idtr) : "memory");
+    if (!g_tr_loaded) {
+        __asm__ volatile("ltr %w0" : : "r"(SEL_TSS));
+        g_tr_loaded = 1;
+    } else {
+        /* LTR marked the descriptor busy; the rebuilt one is available:
+           keep it busy, as the loaded TR expects. */
+        g_gdt2[(SEL_TSS >> 3) * 2 + 1] |= 0x200;
+    }
+    if (cr4_set) {
+        uint32_t cr4;
+        __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+        __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 | cr4_set));
+    }
+    if (cr0_set) {
+        uint32_t cr0;
+        __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+        __asm__ volatile("mov %0, %%cr0" : : "r"(cr0 | cr0_set));
+    }
+}
+
+static void
+ring_env_off(uint32_t cr4_clear, uint32_t cr0_clear)
+{
+    if (cr4_clear) {
+        uint32_t cr4;
+        __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+        __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 & ~cr4_clear));
+    }
+    if (cr0_clear) {
+        uint32_t cr0;
+        __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+        __asm__ volatile("mov %0, %%cr0" : : "r"(cr0 & ~cr0_clear));
+    }
+    __asm__ volatile("lgdt %0\n\tlidt %1" : : "m"(g_saved_gdtr), "m"(g_saved_idtr) : "memory");
+}
+#endif
+
+/* V86 code goes in conventional memory, 16-byte aligned so IP starts at
+   0 in each slot. */
+static uint32_t g_v86_next = V86_ARENA;
+
+static uint8_t *
+v86_alloc(uint32_t len)
+{
+    uint32_t a = (g_v86_next + 15) & ~15u;
+    if (a + len > V86_ARENA_END) {
+        g_arena_wraps++;
+        a = V86_ARENA;
+    }
+    g_v86_next = a + len;
+    return (uint8_t *) a;
+}
+
 static void
 code16_base(uint32_t base)
 {
@@ -774,7 +960,7 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
         /* In 16-bit code the IP is already relative to the code; a fault
            at an address in the sandbox is given relative to the buffer
            (bit 31 set), so it compares across machines. */
-        o->fault_ip = v->code16 ? g_fault.eip : g_fault.eip - (uint32_t) slot;
+        o->fault_ip = v->code16 || v->ring == 4 ? g_fault.eip : g_fault.eip - (uint32_t) slot;
         if (!v->code16 && g_fault.eip >= (uint32_t) SANDBOX && g_fault.eip < (uint32_t) SANDBOX + SANDBOX_SIZE)
             o->fault_ip = 0x80000000u | (g_fault.eip - (uint32_t) g_buf);
         o->fault_err = g_fault.err;
@@ -920,6 +1106,102 @@ dump_this(const struct variant *v)
 }
 #endif
 
+/* The seven registers from the input: in V86 through DS = 0 from the copy
+   at V86_BLOCK. */
+static void
+emit_ring_regs(struct emit *e, int v86)
+{
+    static const int order[] = { R_ECX, R_EDX, R_EBX, R_EBP, R_ESI, R_EDI, R_EAX };
+    for (unsigned i = 0; i < 7; i++) {
+        uint32_t *r = in_reg(order[i]);
+        if (v86) {
+            uint32_t disp = V86_BLOCK + (uint32_t) ((uint8_t *) r - (uint8_t *) &g_in);
+            e8(e, 0x66); /* mov r32, [disp16] */
+            e8(e, 0x8b);
+            e8(e, 0x06 | (order[i] << 3));
+            e8(e, disp);
+            e8(e, disp >> 8);
+        } else {
+            e8(e, 0x8b); /* mov r32, [abs] */
+            e8(e, 0x05 | (order[i] << 3));
+            e32(e, (uint32_t) r);
+        }
+    }
+}
+
+/* A test at CPL 1-3 or in V86: IRETD there with the input flags (IOPL and
+   AC from ring_flags), load the registers, run the producer and the
+   target, and INT 30h back; the registers come back through the fault
+   path, and a fault on the way is the result instead. */
+static void
+emit_ring(struct emit *e, const struct variant *v)
+{
+    static const uint8_t code_sel[4] = { 0, SEL_CODE1 | 1, SEL_CODE2 | 2, SEL_CODE3 | 3 };
+    static const uint8_t data_sel[4] = { 0, SEL_DATA1 | 1, SEL_DATA2 | 2, SEL_DATA3 | 3 };
+    int                  v86          = v->ring == 4;
+    uint8_t             *low          = 0, *push_l = 0;
+
+    if (v86) {
+        low = v86_alloc(96 + v->target_len);
+        for (int i = 0; i < 5; i++) { /* GS FS DS ES SS: all 0 */
+            e8(e, 0x6a);
+            e8(e, 0x00);
+        }
+        e8(e, 0x68); /* ESP */
+        e32(e, V86_STACK);
+    } else {
+        e8(e, 0x6a); /* SS */
+        e8(e, data_sel[v->ring]);
+        e8(e, 0x68); /* ESP */
+        e32(e, (uint32_t) g_rstack[v->ring] + sizeof(g_rstack[0]));
+    }
+    e8(e, 0xff); /* push dword [flags] */
+    e8(e, 0x35);
+    e32(e, (uint32_t) &g_in.flags);
+    e8(e, 0x81); /* and dword [esp], ~(TF IF IOPL AC VM) */
+    e8(e, 0x24);
+    e8(e, 0x24);
+    e32(e, ~(0x0100u | 0x0200u | 0x3000u | 0x40000u | 0x20000u));
+    e8(e, 0x81); /* or dword [esp], ring_flags (+ VM) */
+    e8(e, 0x0c);
+    e8(e, 0x24);
+    e32(e, v->ring_flags | (v86 ? 0x20000u : 0));
+    if (v86) {
+        e8(e, 0x68); /* CS */
+        e32(e, (uint32_t) low >> 4);
+        e8(e, 0x68); /* IP */
+        e32(e, 0);
+    } else {
+        e8(e, 0x6a); /* CS */
+        e8(e, code_sel[v->ring]);
+        e8(e, 0x68); /* EIP: just after the IRETD */
+        push_l = e->p;
+        e32(e, 0);
+    }
+    e8(e, 0xcf); /* iretd */
+    if (v86) {
+        struct emit c = { low };
+        emit_ring_regs(&c, 1);
+        emit_body(&c, v);
+        e8(&c, 0xcd); /* int 30h */
+        e8(&c, 0x30);
+    } else {
+        put32_at(push_l, (uint32_t) e->p);
+        e8(e, 0x66); /* mov ax, data selector; mov ds, ax; mov es, ax */
+        e8(e, 0xb8);
+        e8(e, data_sel[v->ring]);
+        e8(e, 0x00);
+        e8(e, 0x8e);
+        e8(e, 0xd8);
+        e8(e, 0x8e);
+        e8(e, 0xc0);
+        emit_ring_regs(e, 0);
+        emit_body(e, v);
+        e8(e, 0xcd); /* int 30h */
+        e8(e, 0x30);
+    }
+}
+
 /* One variant with one input, run four times from a fresh address. */
 static void
 run_variant(const struct variant *v)
@@ -935,8 +1217,8 @@ run_variant(const struct variant *v)
     if (v->fix_input)
         v->fix_input(v);
 #ifdef HOSTTEST
-    if (v->code16)
-        g_skip = 1; /* no far calls into our own GDT in a Linux process */
+    if (v->code16 || v->ring)
+        g_skip = 1; /* no far calls into our own GDT, no rings or V86, in a Linux process */
 #endif
     if (g_skip)
         return;
@@ -952,68 +1234,77 @@ run_variant(const struct variant *v)
         len += v->target_len;
     uint8_t    *slot = arena_alloc(len);
     struct emit e    = { slot };
-    emit_prologue(&e);
-    if (v->stack) {
-        e8(&e, 0x89); /* mov [g_stack_save], esp */
-        e8(&e, 0x25);
-        e32(&e, (uint32_t) &g_stack_save);
-        e8(&e, 0xbc); /* mov esp, STACK_TOP */
-        e32(&e, (uint32_t) STACK_TOP);
-    }
-    if (v->mmx) {
-        e8(&e, 0xdb); /* fninit: the same x87 state every time */
-        e8(&e, 0xe3);
-        for (int i = 0; i < 8; i++) {
-            e8(&e, 0x0f); /* movq mmI, [g_mmx_in + 8*I] */
-            e8(&e, 0x6f);
-            e8(&e, 0x05 | (i << 3));
-            e32(&e, (uint32_t) &g_mmx_in[2 * i]);
-        }
-    }
-    if (v->code16) {
-        e8(&e, 0x9a); /* call far 18h:0000; the 16-bit part follows the epilogue */
-        e32(&e, 0);
-        e8(&e, SEL_CODE16);
-        e8(&e, 0x00);
+    if (v->ring)
+        emit_ring(&e, v);
+    else {
+        emit_prologue(&e);
         if (v->stack) {
-            /* wipe the return address the call left on the private stack */
-            static const uint8_t scrub[2][8] = { { 0xc7, 0x44, 0x24, 0xf8, 0, 0, 0, 0 },
-                                                 { 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0 } };
-            ebytes(&e, scrub[0], 8);
-            ebytes(&e, scrub[1], 8);
+            e8(&e, 0x89); /* mov [g_stack_save], esp */
+            e8(&e, 0x25);
+            e32(&e, (uint32_t) &g_stack_save);
+            e8(&e, 0xbc); /* mov esp, STACK_TOP */
+            e32(&e, (uint32_t) STACK_TOP);
         }
-    } else
-        emit_body(&e, v);
-    if (v->mmx) {
-        for (int i = 0; i < 8; i++) {
-            e8(&e, 0x0f); /* movq [g_mmx_out + 8*I], mmI */
-            e8(&e, 0x7f);
-            e8(&e, 0x05 | (i << 3));
-            e32(&e, (uint32_t) &g_mmx_out[2 * i]);
+        if (v->mmx) {
+            e8(&e, 0xdb); /* fninit: the same x87 state every time */
+            e8(&e, 0xe3);
+            for (int i = 0; i < 8; i++) {
+                e8(&e, 0x0f); /* movq mmI, [g_mmx_in + 8*I] */
+                e8(&e, 0x6f);
+                e8(&e, 0x05 | (i << 3));
+                e32(&e, (uint32_t) &g_mmx_in[2 * i]);
+            }
         }
-        e8(&e, 0x0f); /* emms */
-        e8(&e, 0x77);
-    }
-    if (v->stack) {
-        e8(&e, 0x89); /* mov [g_stack_out], esp */
-        e8(&e, 0x25);
-        e32(&e, (uint32_t) &g_stack_out);
-        e8(&e, 0x8b); /* mov esp, [g_stack_save] */
-        e8(&e, 0x25);
-        e32(&e, (uint32_t) &g_stack_save);
-    }
-    emit_epilogue(&e, v->stack || v->flags_mask);
-    if (v->code16) {
-        code16_base((uint32_t) e.p);
-        emit_body(&e, v);
-        e8(&e, 0x66); /* o32 retf: back to the 32-bit caller */
-        e8(&e, 0xcb);
+        if (v->code16) {
+            e8(&e, 0x9a); /* call far 18h:0000; the 16-bit part follows the epilogue */
+            e32(&e, 0);
+            e8(&e, SEL_CODE16);
+            e8(&e, 0x00);
+            if (v->stack) {
+                /* wipe the return address the call left on the private stack */
+                static const uint8_t scrub[2][8] = { { 0xc7, 0x44, 0x24, 0xf8, 0, 0, 0, 0 },
+                                                     { 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0 } };
+                ebytes(&e, scrub[0], 8);
+                ebytes(&e, scrub[1], 8);
+            }
+        } else
+            emit_body(&e, v);
+        if (v->mmx) {
+            for (int i = 0; i < 8; i++) {
+                e8(&e, 0x0f); /* movq [g_mmx_out + 8*I], mmI */
+                e8(&e, 0x7f);
+                e8(&e, 0x05 | (i << 3));
+                e32(&e, (uint32_t) &g_mmx_out[2 * i]);
+            }
+            e8(&e, 0x0f); /* emms */
+            e8(&e, 0x77);
+        }
+        if (v->stack) {
+            e8(&e, 0x89); /* mov [g_stack_out], esp */
+            e8(&e, 0x25);
+            e32(&e, (uint32_t) &g_stack_out);
+            e8(&e, 0x8b); /* mov esp, [g_stack_save] */
+            e8(&e, 0x25);
+            e32(&e, (uint32_t) &g_stack_save);
+        }
+        emit_epilogue(&e, v->stack || v->flags_mask);
+        if (v->code16) {
+            code16_base((uint32_t) e.p);
+            emit_body(&e, v);
+            e8(&e, 0x66); /* o32 retf: back to the 32-bit caller */
+            e8(&e, 0xcb);
+        }
+
     }
 
     /* Only the memory forms (those with an input fixer) and the stack
        variants touch memory: the sandbox is refilled and checked for them
        alone. */
     int mem = (v->fix_input != 0 && !v->reg_fix) || v->stack;
+#ifndef HOSTTEST
+    if (v->ring == 4)
+        memcpy((void *) V86_BLOCK, &g_in, 32); /* the flags and registers, for V86 */
+#endif
     for (int r = 0; r < RUNS; r++) {
         if (mem)
             memset(SANDBOX, 0xa5, SANDBOX_SIZE);

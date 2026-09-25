@@ -107,6 +107,7 @@ between versions until the group itself changes.
 | 208 | `pg.string` | REP MOVS/STOS/LODS running into a missing page part-way, both directions: registers at the fault and the memory done |
 | 209 | `pg.exec` | a jump and a call into a missing page: #PF on the fetch |
 | 210 | `pg.smc.alias` | code patched through a second mapping of its own page |
+| 211 | `r3.basic` | code at CPL 3: arithmetic, memory, the stack, and what it can see (CS, SS, DS, PUSHFD, SMSW, STR, SLDT, SGDT) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -164,6 +165,8 @@ DONE   pass=N tests= mismatches= arena_wraps= PASS|FAIL
   into this CRC.
   With paging on, a #PF's `fault_err` is the error code plus CR2 (relative
   to the buffer) shifted left 8.
+  A ring or V86 test ends with INT 30h, so its normal result has fault
+  vector 30h; any other vector is a fault on the way.
 - `crc_raw`: the same results with nothing masked (in `exhaust8`, EDI's
   checksum of all the flags). Compare this one only
   against the **same** CPU model; it catches undefined-flag behaviour that
@@ -226,7 +229,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_loop.inc` | groups 37-178: sampled loops, one instruction each        |
 | `groups_map.inc` | groups 179-194: the 0F opcode map                          |
 | `groups_cpu.inc` | groups 195-199: aliases, CPUID, MSRs, the TSC, Cyrix       |
-| `groups_paging.inc` | groups 200 on: paging                                   |
+| `groups_paging.inc` | groups 200-210: paging                                  |
+| `groups_ring.inc` | groups 211 on: rings 1-3 and V86 mode                    |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

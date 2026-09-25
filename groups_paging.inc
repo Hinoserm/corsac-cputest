@@ -14,6 +14,7 @@
 #define PG_ALIAS_LIN 0x40000000u
 #define PTE_P  0x001u
 #define PTE_W  0x002u
+#define PTE_U  0x004u
 #define PTE_A  0x020u
 #define PTE_D  0x040u
 #define PDE_PS 0x080u
@@ -24,6 +25,8 @@
 
 /* The code page a pg.smc.alias variant patches, set when it is emitted. */
 static uint32_t g_smc_page;
+/* Set by the ring groups: every page user-accessible, for code at CPL 3. */
+static uint32_t g_pg_user;
 
 static uint32_t *
 pte_of(uint32_t lin)
@@ -42,11 +45,11 @@ pg_build(void)
     for (int i = 0; i < 1024; i++)
         pd[i] = 0;
     for (int i = 0; i < 64; i++)
-        pd[i] = (PG_TABLES + i * 4096) | PTE_P | PTE_W;
-    pd[PG_ALIAS_LIN >> 22] = PG_ALIAS | PTE_P | PTE_W;
+        pd[i] = (PG_TABLES + i * 4096) | PTE_P | PTE_W | g_pg_user;
+    pd[PG_ALIAS_LIN >> 22] = PG_ALIAS | PTE_P | PTE_W | g_pg_user;
     uint32_t *pt = (uint32_t *) PG_TABLES;
     for (uint32_t i = 0; i < 64 * 1024; i++)
-        pt[i] = (i << 12) | PTE_P | PTE_W;
+        pt[i] = (i << 12) | PTE_P | PTE_W | g_pg_user;
     uint32_t *al = (uint32_t *) PG_ALIAS;
     for (int i = 0; i < 1024; i++)
         al[i] = 0;
@@ -66,11 +69,11 @@ pg_reset(const struct variant *v)
 {
     uint32_t base = (uint32_t) SANDBOX;
     for (uint32_t a = base; a < base + SANDBOX_SIZE; a += 4096)
-        *pte_of(a) = a | PTE_P | PTE_W;
+        *pte_of(a) = a | PTE_P | PTE_W | g_pg_user;
     uint32_t *al = (uint32_t *) PG_ALIAS;
     for (int i = 0; i < 16; i++)
         al[i] = 0;
-    ((uint32_t *) PG_DIR)[PG_ALIAS_LIN >> 22] = PG_ALIAS | PTE_P | PTE_W; /* a PSE test takes it */
+    ((uint32_t *) PG_DIR)[PG_ALIAS_LIN >> 22] = PG_ALIAS | PTE_P | PTE_W | g_pg_user; /* a PSE test takes it */
     pg_flush();
 }
 
@@ -81,7 +84,8 @@ pg_reset(const struct variant *v)
    4: the second page read-only;
    8: the page after it (sandbox + 3000h) not present;
    16: 1 GB up a 4 MB page onto physical 0 (PSE);
-   32: the first alias page onto g_smc_page. */
+   32: the first alias page onto g_smc_page;
+   64: the second page supervisor-only (with g_pg_user). */
 static void
 pg_setup(const struct variant *v)
 {
@@ -99,6 +103,8 @@ pg_setup(const struct variant *v)
         ((uint32_t *) PG_DIR)[PG_ALIAS_LIN >> 22] = PTE_P | PTE_W | PDE_PS;
     if (a & 32)
         ((uint32_t *) PG_ALIAS)[0] = g_smc_page | PTE_P | PTE_W;
+    if (a & 64)
+        *pte_of(s + 0x2000) &= ~PTE_U;
     pg_flush();
 }
 
