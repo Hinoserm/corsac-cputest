@@ -536,6 +536,7 @@ static const struct group_def groups[] = {
     G(group_iret_flags),
     G(group_xlat),
     G(group_syscall),
+    G(group_r3_pvi),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

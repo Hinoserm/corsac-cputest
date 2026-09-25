@@ -190,6 +190,7 @@ between versions until the group itself changes.
 | 291 | `iret.flags` | IRETD at CPL 0 with EFLAGS images carrying IOPL, AC, ID, RF, VIF and VIP: which of them stick |
 | 292 | `xlat` | XLAT with DS, ES: and CS: overrides, a null FS (#GP) and 16-bit addressing |
 | 293 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
+| 294 | `r3.pvi` | CR4.PVI: CLI and STI change VIF at CPL 3, STI with VIP set #GP, POPFD leaves IF and VIF, IOPL 3 and rings 1-2 unaffected |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

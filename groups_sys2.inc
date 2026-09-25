@@ -175,3 +175,36 @@ group_syscall(void)
     }
     ring_end(v.group, 0, 0);
 }
+
+/* ---- CR4.PVI ------------------------------------------------------------------------ */
+
+/* Protected-mode virtual interrupts: at CPL 3 with IOPL < 3, CLI and STI
+   change VIF instead of faulting, and STI with VIP set is #GP; POPFD
+   changes neither IF nor VIF; at IOPL 3 CLI is the real one; outside
+   ring 3 nothing changes (#GP). */
+static void
+group_r3_pvi(void)
+{
+    static const struct rx_seq seqs[] = {
+        { 3, 0, 1, SEQ(0xfa, 0x9c, 0x5e), EF_VIF, 0 },                         /* cli: VIF clear */
+        { 3, 0, 1, SEQ(0xfb, 0x9c, 0x5e), 0, 0 },                              /* sti: VIF set */
+        { 3, 0, 1, SEQ(0xfb), EF_VIP, 0 },                                     /* sti with VIP: #GP */
+        { 3, 0, 1, SEQ(0xfa, 0x9c, 0x5e), EF_VIP | EF_VIF, 0 },                /* cli with VIP: fine */
+        { 3, 0, 1, SEQ(0x9c, 0x5e), EF_VIF, 0 },                               /* pushfd shows VIF */
+        { 3, 0, 1, SEQ(0x68, 0x00, 0x02, 0x00, 0x00, 0x9d, 0x9c, 0x5e), EF_VIF, 0 }, /* popfd with IF */
+        { 3, 0, 1, SEQ(0x68, 0x00, 0x00, 0x08, 0x00, 0x9d, 0x9c, 0x5e), 0, 0 }, /* popfd with VIF */
+        { 3, 3, 1, SEQ(0xfa, 0x9c, 0x5e), EF_VIF, 0 },                         /* IOPL 3: the real CLI */
+        { 1, 0, 1, SEQ(0xfa), 0, 0 },                                          /* ring 1: #GP */
+        { 2, 0, 1, SEQ(0xfb), 0, 0 },                                          /* ring 2: #GP */
+    };
+    struct variant v = { .group = "r3.pvi", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                         .fx = FX_CUSTOM, .defmask = dm_fxarg };
+    if (!(g_cpu.features & CPUID_VME)) {
+        group_skip(v.group, "no VME");
+        return;
+    }
+    if (!ring_begin(v.group, CR4_PVI, 0))
+        return;
+    rx_run(&v, seqs, sizeof(seqs) / sizeof(seqs[0]));
+    ring_end(v.group, CR4_PVI, 0);
+}
