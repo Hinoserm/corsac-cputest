@@ -5,7 +5,7 @@ against its interpreter, and both against real CPUs, from the 486 up.
 
 It runs with no OS at all, from either of these:
 
-- **`cputest.img`**: a 16 MB disk image. Write it to a CF card or hard disk
+- **`output/cputest.img`**: a 16 MB disk image. Write it to a CF card or hard disk
   and boot it. The boot sector loads the test and calls it the way a BIOS
   calls an option ROM.
 - **`build/cputest.rom`**: the same test as a 64 KB option ROM, for an ISA
@@ -18,7 +18,7 @@ the CPU's vendor, signature and feature flags.
 ## Running it on real hardware
 
 ```
-dd if=cputest.img of=/dev/sdX bs=1M
+dd if=output/cputest.img of=/dev/sdX bs=1M
 ```
 
 Boot from the card. Each pass runs every group, then starts again, forever.
@@ -142,7 +142,7 @@ Two interpreter bugs in 86Box turned up this way, both in upstream master:
 Needs `nasm`, a GCC that can target i386 (`-m32`), and binutils.
 
 ```
-python3 build.py              # build/cputest.rom and build/cputest.img
+python3 build.py              # build/cputest.rom, build/cputest.img and output/cputest.img
 python3 build.py --dump       # also prints one line per defined result (D) and raw result (R)
 python3 build.py --host       # build/cputest: a static i386 Linux ELF of the same harness
 ```
