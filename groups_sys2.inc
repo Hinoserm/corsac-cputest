@@ -8,71 +8,6 @@
  * into groups.inc after groups_prot.inc.
  */
 
-#define EXT_SYSCALL (1u << 11)
-#define MSR_EFER    0xc0000080u
-#define MSR_STAR    0xc0000081u
-#define CR4_PVI     (1u << 1)
-#define CR4_PGE     (1u << 7)
-#define CR4_PCE     (1u << 8)
-#define CPUID_PGE   (1u << 13)
-#define EF_VIF      0x80000u
-#define EF_VIP      0x100000u
-#define ALIAS       0x00, 0x00, 0x00, 0x40 /* PG_ALIAS_LIN, little-endian */
-
-/* A ring sequence with any EFLAGS on the way in and a 32-bit setup (arg3:
-   ring_setup's bitmaps in bits 0-1, pg_setup's pages from 128 up, a
-   group's own bits from 100000h). */
-struct rx_seq {
-    uint8_t  ring, iopl, defined, len, b[24];
-    uint32_t flags;
-    uint32_t setup;
-};
-
-static __attribute__((unused)) void
-rx_run(struct variant *v, const struct rx_seq *seqs, unsigned n)
-{
-    for (unsigned i = 0; i < n; i++) {
-        memcpy(v->target, seqs[i].b, seqs[i].len);
-        v->target_len = seqs[i].len;
-        v->ring       = seqs[i].ring;
-        v->ring_flags = IOPL(seqs[i].iopl) | seqs[i].flags;
-        v->arg3       = seqs[i].setup;
-        v->fx_arg     = seqs[i].defined;
-        run_plain(v, 1);
-    }
-}
-
-#ifndef HOSTTEST
-static __attribute__((unused)) void
-wrmsr_(uint32_t msr, uint32_t lo, uint32_t hi)
-{
-    __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
-}
-
-static __attribute__((unused)) uint32_t
-rdmsr_lo(uint32_t msr)
-{
-    uint32_t lo, hi;
-    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
-    return lo;
-}
-
-static __attribute__((unused)) void
-cr4_set(uint32_t bits, int on)
-{
-    uint32_t cr4;
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
-    cr4 = on ? cr4 | bits : cr4 & ~bits;
-    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
-}
-#endif
-
-static int
-is_vendor(const char *v)
-{
-    return g_cpu.has_cpuid && !memcmp_(g_cpu.vendor, v, 12);
-}
-
 /* ---- AMD SYSCALL and SYSRET (K6-2, K6-III) ------------------------------------ */
 
 /* STAR: SYSCALL to 08h (SS 10h) at the variant's landing point, SYSRET to
@@ -178,81 +113,9 @@ group_syscall(void)
 
 /* ---- CR4.PVI ------------------------------------------------------------------------ */
 
-/* Protected-mode virtual interrupts: at CPL 3 with IOPL < 3, CLI and STI
-   change VIF instead of faulting, and STI with VIP set is #GP; POPFD
-   changes neither IF nor VIF; at IOPL 3 CLI is the real one; outside
-   ring 3 nothing changes (#GP). */
-static void
-group_r3_pvi(void)
-{
-    static const struct rx_seq seqs[] = {
-        { 3, 0, 1, SEQ(0xfa, 0x9c, 0x5e), EF_VIF, 0 },                         /* cli: VIF clear */
-        { 3, 0, 1, SEQ(0xfb, 0x9c, 0x5e), 0, 0 },                              /* sti: VIF set */
-        { 3, 0, 1, SEQ(0xfb), EF_VIP, 0 },                                     /* sti with VIP: #GP */
-        { 3, 0, 1, SEQ(0xfa, 0x9c, 0x5e), EF_VIP | EF_VIF, 0 },                /* cli with VIP: fine */
-        { 3, 0, 1, SEQ(0x9c, 0x5e), EF_VIF, 0 },                               /* pushfd shows VIF */
-        { 3, 0, 1, SEQ(0x68, 0x00, 0x02, 0x00, 0x00, 0x9d, 0x9c, 0x5e), EF_VIF, 0 }, /* popfd with IF */
-        { 3, 0, 1, SEQ(0x68, 0x00, 0x00, 0x08, 0x00, 0x9d, 0x9c, 0x5e), 0, 0 }, /* popfd with VIF */
-        { 3, 3, 1, SEQ(0xfa, 0x9c, 0x5e), EF_VIF, 0 },                         /* IOPL 3: the real CLI */
-        { 1, 0, 1, SEQ(0xfa), 0, 0 },                                          /* ring 1: #GP */
-        { 2, 0, 1, SEQ(0xfb), 0, 0 },                                          /* ring 2: #GP */
-    };
-    struct variant v = { .group = "r3.pvi", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
-                         .fx = FX_CUSTOM, .defmask = dm_fxarg };
-    if (!(g_cpu.features & CPUID_VME)) {
-        group_skip(v.group, "no VME");
-        return;
-    }
-    if (!ring_begin(v.group, CR4_PVI, 0))
-        return;
-    rx_run(&v, seqs, sizeof(seqs) / sizeof(seqs[0]));
-    ring_end(v.group, CR4_PVI, 0);
-}
 
 /* ---- RDPMC and CR4.PCE ---------------------------------------------------------------- */
 
-/* RDPMC of counters 0, 1 and 2 (#GP: there are two) at CPL 0, and outside
-   it with and without CR4.PCE (setup 100000h). The counts are cleared
-   straight after: only whether it faults counts. Intel with MMX, and the
-   Pentium Pro. */
-static void
-pce_before(const struct variant *v)
-{
-    ring_setup(v);
-#ifndef HOSTTEST
-    cr4_set(CR4_PCE, v->arg3 & 0x100000);
-#endif
-}
-
-static void
-pce_after(const struct variant *v)
-{
-#ifndef HOSTTEST
-    cr4_set(CR4_PCE, 0);
-#endif
-}
-
-#define PMC(r, c, pce) { r, 0, 1, SEQ(0xb9, c, 0, 0, 0, 0x0f, 0x33, 0x31, 0xc0, 0x31, 0xd2), 0, (pce) ? 0x100000 : 0 }
-
-static void
-group_rdpmc_pce(void)
-{
-    static const struct rx_seq seqs[] = {
-        PMC(0, 0, 0), PMC(0, 1, 0), PMC(0, 2, 0), PMC(3, 0, 0), PMC(3, 0, 1),
-        PMC(3, 1, 1), PMC(3, 2, 1), PMC(1, 0, 0), PMC(1, 0, 1), PMC(2, 1, 1),
-    };
-    struct variant v      = { .group = "rdpmc.pce", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = pce_before,
-                              .after_run = pce_after, .fx = FX_CUSTOM, .defmask = dm_fxarg };
-    unsigned       family = (g_cpu.signature >> 8) & 0xf;
-    if (!is_vendor("GenuineIntel") || !(family == 6 || (family == 5 && (g_cpu.features & CPUID_MMX)))) {
-        group_skip(v.group, "not a Pentium MMX or Pentium Pro");
-        return;
-    }
-    if (!ring_begin(v.group, 0, 0))
-        return;
-    rx_run(&v, seqs, sizeof(seqs) / sizeof(seqs[0]));
-    ring_end(v.group, 0, 0);
-}
 
 /* ---- read-modify-write on read-only and clean pages ------------------------------------- */
 
@@ -525,72 +388,6 @@ group_cyrix_emmi(void)
 
 /* ---- IRETD's checks on the frame --------------------------------------------------------------------------- */
 
-/* IRETD at CPL 0 through a hand-built frame to an outer ring: a good one
-   (DS, ES and FS of DPL 0 come out null), then a null, data, RPL-0 or
-   out-of-GDT CS, a null, RPL-mismatched, DPL-0, read-only, not-present
-   or TSS SS; execute-only and conforming code are fine to land in.
-   arg3: SS << 16 | CS. */
-static void
-emit_iretfr(struct emit *e, const struct variant *v)
-{
-    static const uint8_t land[] = {
-        0x8c, 0xde, /* mov esi, ds */
-        0x8c, 0xc7, /* mov edi, es */
-        0x8c, 0xe5, /* mov ebp, fs */
-        0x8c, 0xca, /* mov edx, cs */
-        0xcd, 0x30, /* int 30h */
-    };
-    e8(e, 0x68); /* push ss */
-    e32(e, v->arg3 >> 16);
-    e8(e, 0x68); /* push esp */
-    e32(e, (uint32_t) g_rstack[3] + sizeof(g_rstack[0]));
-    e8(e, 0x6a); /* push eflags: nothing but bit 1 */
-    e8(e, 0x02);
-    e8(e, 0x68); /* push cs */
-    e32(e, v->arg3 & 0xffff);
-    e8(e, 0x68); /* push the landing point */
-    uint8_t *l = e->p;
-    e32(e, 0);
-    e8(e, 0xcf); /* iretd */
-    put32_at(l, (uint32_t) e->p);
-    ebytes(e, land, sizeof(land));
-}
-
-static void
-group_iret_frames(void)
-{
-    static const uint16_t frames[][2] = {
-        { SEL_CODE3 | 3, SEL_DATA3 | 3 },   /* good */
-        { 0, SEL_DATA3 | 3 },               /* CS null */
-        { SEL_DATA3 | 3, SEL_DATA3 | 3 },   /* CS data */
-        { SEL_CODE3, SEL_DATA3 | 3 },       /* CS RPL 0, DPL 3 */
-        { 0x1f8 | 3, SEL_DATA3 | 3 },       /* CS past the GDT */
-        { SEL_CODE3 | 3, 0 },               /* SS null */
-        { SEL_CODE3 | 3, SEL_DATA3 },       /* SS RPL 0 */
-        { SEL_CODE3 | 3, 0x10 | 3 },        /* SS DPL 0 */
-        { SEL_CODE3 | 3, SEL_RO3 | 3 },     /* SS read-only */
-        { SEL_CODE3 | 3, SEL_NP3 | 3 },     /* SS not present: #SS */
-        { SEL_CODE3 | 3, SEL_TSS | 3 },     /* SS a TSS */
-        { SEL_XO3 | 3, SEL_DATA3 | 3 },     /* execute-only code */
-        { SEL_CONF3 | 3, SEL_DATA3 | 3 },   /* conforming, DPL 3 */
-        { SEL_CONF0 | 3, SEL_DATA3 | 3 },   /* conforming, DPL 0, RPL 3 */
-        { SEL_CODE1 | 1, SEL_DATA1 | 1 },   /* to ring 1 */
-        { SEL_CODE1 | 1, SEL_DATA3 | 3 },   /* ring 1 CS, ring 3 SS */
-    };
-    struct variant v = { .group = "iret.frames", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
-                         .emit = emit_iretfr, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
-    if (!ring_begin(v.group, 0, 0))
-        return;
-    for (unsigned i = 0; i < sizeof(frames) / sizeof(frames[0]); i++) {
-        v.target[0]  = 0xcf; /* for the reports */
-        put_le(v.target + 1, frames[i][0], 2);
-        put_le(v.target + 3, frames[i][1], 2);
-        v.target_len = 5;
-        v.arg3       = (uint32_t) frames[i][1] << 16 | frames[i][0];
-        run_plain(&v, 1);
-    }
-    ring_end(v.group, 0, 0);
-}
 
 /* ---- the fast system-call opcodes where they aren't ---------------------------------------------------------- */
 

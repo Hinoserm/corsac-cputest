@@ -65,6 +65,49 @@ dm_fxarg(const struct variant *v, const struct kin *in, struct kout *d, uint16_t
     return v->fx_arg;
 }
 
+/* CPU features and registers several groups use. */
+#define EXT_SYSCALL (1u << 11)
+#define MSR_EFER    0xc0000080u
+#define MSR_STAR    0xc0000081u
+#define CR4_PVI     (1u << 1)
+#define CR4_PGE     (1u << 7)
+#define CR4_PCE     (1u << 8)
+#define CPUID_PGE   (1u << 13)
+#define EF_VIF      0x80000u
+#define EF_VIP      0x100000u
+#define ALIAS       0x00, 0x00, 0x00, 0x40 /* PG_ALIAS_LIN, little-endian */
+
+#ifndef HOSTTEST
+static __attribute__((unused)) void
+wrmsr_(uint32_t msr, uint32_t lo, uint32_t hi)
+{
+    __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
+}
+
+static __attribute__((unused)) uint32_t
+rdmsr_lo(uint32_t msr)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return lo;
+}
+
+static __attribute__((unused)) void
+cr4_set(uint32_t bits, int on)
+{
+    uint32_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 = on ? cr4 | bits : cr4 & ~bits;
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+}
+#endif
+
+static __attribute__((unused)) int
+is_vendor(const char *v)
+{
+    return g_cpu.has_cpuid && !memcmp_(g_cpu.vendor, v, 12);
+}
+
 static void
 run_inputs(struct variant *v, int inputs)
 {
@@ -407,7 +450,6 @@ group_bt(void)
 #include "groups_debug.inc"
 #include "groups_sys.inc"
 #include "groups_desc.inc"
-#include "groups_prot.inc"
 #include "groups_sys2.inc"
 
 /* The groups in order. A group is a function, or one of a family of
@@ -528,19 +570,12 @@ static const struct group_def groups[] = {
     G(group_task_call),
     G(group_task_jmp),
     G(group_task_errors),
-    G(group_lar_systypes),
-    G(group_seg_types),
-    G(group_idt_types),
-    G(group_idt_limit),
     G(group_syscall),
-    G(group_r3_pvi),
-    G(group_rdpmc_pce),
     G(group_pg_rmw),
     G(group_pg_pde),
     G(group_pg_global),
     G(group_r3_pde),
     G(group_cyrix_emmi),
-    G(group_iret_frames),
     G(group_sysops_ud),
 };
 

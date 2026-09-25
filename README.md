@@ -116,7 +116,7 @@ goes into the group that already covers it, not into a group of its own.
 | 216 | `r3.seg` | segment loads at CPL 3 (DPL and RPL rules, SS, system descriptors, null) and LAR/VERR/VERW |
 | 217 | `r3.gates` | call gates of every DPL (and into ring 1), parameter copying, conforming code, direct and JMP transfers that must #GP |
 | 218 | `r3.int` | INT through gates of DPL 0 and 1 (#GP), INT3 and INT 3 (#GP), ICEBP (no DPL check), INTO |
-| 219 | `r3.tsd` | CR4.TSD: RDTSC faults outside ring 0, whatever IOPL; RDPMC without CR4.PCE |
+| 219 | `r3.tsd` | CR4.TSD: RDTSC faults outside ring 0, whatever IOPL; RDPMC without CR4.PCE; RDPMC of counters 0-2 at CPL 0-3 with and without CR4.PCE (Pentium MMX, P6) |
 | 220 | `r3.pf` | paging at CPL 3: supervisor pages, read-only pages, missing pages; U/S in the error code |
 | 221 | `r1.basic` | code at CPL 1 (CORSAC's sub-kernels): the same as r3.basic |
 | 222 | `r1.priv` | every privileged instruction at CPL 1: #GP(0) |
@@ -129,23 +129,23 @@ goes into the group that already covers it, not into a group of its own.
 | 229 | `r1.ac` | CR0.AM and EFLAGS.AC at CPL 1: never #AC |
 | 230 | `r1.pf` | paging at CPL 1: supervisor access to every page, read-only pages writable with WP clear |
 | 231 | `r1.pf.wp` | the same with CR0.WP: ring 1 writes to read-only pages fault |
-| 232 | `r1.outer` | IRETD and RETF from ring 1 to rings 2 and 3: DS and ES of DPL 1 loaded null; IRETD within ring 1 keeps them |
+| 232 | `r1.outer` | IRETD and RETF from ring 1 to rings 2 and 3: DS and ES of DPL 1 loaded null; IRETD within ring 1 keeps them; IRETD from ring 0 through bad frames (null, data, RPL-0, out-of-GDT CS; null, mismatched, DPL-0, read-only, not-present, TSS SS) and to execute-only and conforming code |
 | 233 | `r1.stack` | the stack switch into ring 1 through gates from rings 2 and 3 (SS1:ESP1 from the TSS), none from ring 1 |
-| 234 | `r1.lar` | LAR, LSL and VERR of every descriptor at CPL 1, RPL 0 and 3 (raw) |
+| 234 | `r1.lar` | LAR, LSL and VERR of every descriptor at CPL 1, RPL 0 and 3 (raw); and at CPL 0 over each of the 16 system descriptor types |
 | 235 | `r2.basic` | code and I/O checks at CPL 2 |
 | 236 | `r2.gates` | call gates and far transfers from ring 2, including the DPL-2 gate into ring 1 |
 | 237 | `v86.basic` | V86 mode at IOPL 3: 16-bit and 32-bit arithmetic, segment arithmetic, the stack, PUSHF, CLI; what stays privileged |
 | 238 | `v86.iopl0` | V86 at IOPL 0 without VME: CLI STI PUSHF POPF INT IRET #GP, ports by the bitmap |
 | 239 | `v86.io` | the I/O bitmap in V86 mode, at IOPL 3 too |
 | 240 | `v86.ud` | protected-mode-only instructions in V86 (#UD), an address past 64 KB (#GP) |
-| 241 | `v86.vme` | VME: CLI/STI on VIF, PUSHF/POPF with VIF, INT 60h redirected through the V86 vector table or faulting |
-| 242 | `r3.limits` | FS on read/write, read-only, expand-down (32 and 16-bit), execute/read and execute-only code, page-granular, DPL-1 and missing descriptors at CPL 3, accessed either side of the limit |
+| 241 | `v86.vme` | VME: CLI/STI on VIF, PUSHF/POPF with VIF, INT 60h redirected through the V86 vector table or faulting; CR4.PVI at CPL 3: CLI/STI on VIF, STI with VIP #GP, POPFD leaves IF and VIF, IOPL 3 and rings 1-2 unaffected |
+| 242 | `r3.limits` | FS on read/write, read-only, expand-down (32 and 16-bit), execute/read and execute-only code, page-granular, DPL-1 and missing descriptors at CPL 3, accessed either side of the limit; each of the 16 code/data types at DPL 0 from ring 0 and DPL 3 from ring 3: VERR, VERW, FS load, read and write |
 | 243 | `r2.limits` | the same at CPL 2 |
 | 244 | `r1.limits` | the same at CPL 1 |
 | 245 | `r3.ss` | SS on those descriptors at CPL 3, a push and pop either side of the limit: #SS, #GP, expand-down and 16-bit stacks |
 | 246 | `r1.ss` | the same at CPL 1 |
 | 247 | `conforming` | far calls to conforming code of DPL 0, 1 and 3 from rings 1-3: runs at the caller's CPL, or #GP |
-| 248 | `intgate` | interrupt and trap gates into ring 1, 2 and 3 handlers from every ring; outward and DPL violations #GP |
+| 248 | `intgate` | interrupt and trap gates into ring 1, 2 and 3 handlers from every ring; outward and DPL violations #GP; gates that must fail (not present, type 0, data or null selector) and a 386 trap gate from rings 0 and 3; INT past a shortened IDT and into a gate half inside it |
 | 249 | `r1.inner` | IRETD and RETF from ring 1 to ring 0 and to a mismatched CS (#GP); IRETD in ring 1 can't raise IOPL; RETF 8 |
 | 250 | `r3.code16` | 16-bit code at CPL 3 (Win16): arithmetic, SETcc, memory, the stack, CALL/RET, far calls through 32-bit gates, I/O |
 | 251 | `r1.code16` | 16-bit code at CPL 1 |
@@ -174,20 +174,13 @@ goes into the group that already covers it, not into a group of its own.
 | 274 | `task.call` | task switches by CALL to a TSS, a GDT task gate and an IDT task gate (from rings 0 and 3): the new task's registers, TR, NT and back link; IRET back, TR and busy bits after |
 | 275 | `task.jmp` | task switches by JMP to a TSS and a task gate and back: no nesting, no back link |
 | 276 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
-| 277 | `lar.systypes` | LAR, LSL and VERR of each of the 16 system descriptor types |
-| 278 | `seg.types` | each of the 16 code/data types at DPL 0 from ring 0 and DPL 3 from ring 3: VERR, VERW, a load into FS, a read and a write |
-| 279 | `idt.types` | INT through a not-present gate, a gate of type 0, a 386 trap gate, gates with a data or null selector, from rings 0 and 3 |
-| 280 | `idt.limit` | INT past a shortened IDT's limit, and to a gate only half inside it (#GP with the IDT bit), from rings 0 and 3 |
-| 281 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
-| 282 | `r3.pvi` | CR4.PVI: CLI and STI change VIF at CPL 3, STI with VIP set #GP, POPFD leaves IF and VIF, IOPL 3 and rings 1-2 unaffected |
-| 283 | `rdpmc.pce` | RDPMC of counters 0-2 at CPL 0, and at CPL 1-3 with and without CR4.PCE (Pentium MMX, Pentium Pro) |
-| 284 | `pg.rmw` | CMPXCHG, CMPXCHG8B, XADD and locked BTS/ADD on a read-only page (WP), compare equal and not; the dirty bit after a failed compare |
-| 285 | `pg.pde` | the alias page through a read-only or not-present PDE (WP): reads, writes, CR2, and the PDE's and PTE's A and D bits |
-| 286 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
-| 287 | `r3.pde` | the alias page from rings 1-3 with the PDE or PTE supervisor-only, the PDE read-only or not present |
-| 288 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
-| 289 | `iret.frames` | IRETD at CPL 0 through bad frames: null, data, RPL-0 and out-of-GDT CS; null, mismatched, DPL-0, read-only, not-present and TSS SS; DS/ES/FS nulled on the way out |
-| 290 | `sysops.ud` | SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 0 and 3 with nothing set up |
+| 277 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
+| 278 | `pg.rmw` | CMPXCHG, CMPXCHG8B, XADD and locked BTS/ADD on a read-only page (WP), compare equal and not; the dirty bit after a failed compare |
+| 279 | `pg.pde` | the alias page through a read-only or not-present PDE (WP): reads, writes, CR2, and the PDE's and PTE's A and D bits |
+| 280 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
+| 281 | `r3.pde` | the alias page from rings 1-3 with the PDE or PTE supervisor-only, the PDE read-only or not present |
+| 282 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
+| 283 | `sysops.ud` | SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 0 and 3 with nothing set up |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -344,7 +337,6 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_debug.inc` | groups 255-263: single-step and the debug registers      |
 | `groups_sys.inc` | groups 264-269: control registers                        |
 | `groups_desc.inc` | groups 270 on: descriptors, the LDT, task switches        |
-| `groups_prot.inc` | groups 277 on: LOCK, overrides, far loads, descriptor types, IDT |
 | `groups_sys2.inc` | groups 293 on: SYSCALL, PVI, RDPMC, paging RMW/PDE/global, EMMI, IRET frames |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |

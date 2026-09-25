@@ -12,13 +12,51 @@
 static const uint8_t ring_data_sel[4] = { 0x10, SEL_DATA1 | 1, SEL_DATA2 | 2, SEL_DATA3 | 3 };
 static const uint8_t ring_code_sel[4] = { 0x08, SEL_CODE1 | 1, SEL_CODE2 | 2, SEL_CODE3 | 3 };
 
+/* Each of the 16 code and data types (S = 1), at DPL 0 from ring 0 and
+   DPL 3 from ring 3: VERR and VERW, and a load into FS with a read and a
+   write through it. */
+static void
+seg_types(const char *name)
+{
+    struct variant v = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                         .fix_input = fix_ring, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+    static const uint8_t checks[] = {
+        0x66, 0xb9, 0x00, 0x00, /* mov cx, sel */
+        0x0f, 0x00, 0xe1,       /* verr cx */
+        0x0f, 0x94, 0xc3,       /* setz bl */
+        0x0f, 0x00, 0xe9,       /* verw cx */
+        0x0f, 0x94, 0xc7,       /* setz bh */
+    };
+    static const uint8_t use[] = {
+        0x66, 0xb8, 0x00, 0x00, /* mov ax, sel; mov fs, ax */
+        0x8e, 0xe0,
+        0x64, 0x8b, 0x35, 0x10, 0x00, 0x00, 0x00, /* mov esi, fs:[10h] */
+        0x64, 0x89, 0x0d, 0x20, 0x00, 0x00, 0x00, /* mov fs:[20h], ecx */
+    };
+    for (int r = 0; r <= 3; r += 3) {
+        for (int t = 0; t < 16; t++) {
+            for (int k = 0; k < 2; k++) {
+                const uint8_t *b = k ? use : checks;
+                int            n = k ? (int) sizeof(use) : (int) sizeof(checks);
+                memcpy(v.target, b, n);
+                v.target[2]  = SEL_SCRATCH | r;
+                v.target_len = n;
+                v.ring       = r;
+                v.arg        = SCRATCH_RAW(0x90 | (r << 5) | t, 0x4);
+                v.arg2       = RF_SANDBOX;
+                run_plain(&v, 1);
+            }
+        }
+    }
+}
+
 /* Loads and stores through FS on every kind of scratch descriptor, at
    offsets either side of its limit: 0, the last dword, a dword across the
    limit, the first byte past it, and one well inside an expand-down
    segment's range; and a byte at the limit. The descriptor lies 4 KB into
    the sandbox, so every access that works lands in it. */
 static void
-limits_run(const char *name, int ring)
+limits_run(const char *name, int ring, void (*more)(const char *name))
 {
     static struct ring_seq seqs[N_SCRATCH * 11];
     static const uint32_t  offs[5] = { 0x0000, 0x0ffc, 0x0ffe, 0x1000, 0x2ffc };
@@ -52,25 +90,25 @@ limits_run(const char *name, int ring)
             seqs[n++] = q;
         }
     }
-    ring_run(name, seqs, n, 0, 0, 0);
+    ring_run_more(name, seqs, n, 0, 0, 0, more);
 }
 
 static void
 group_r3_limits(void)
 {
-    limits_run("r3.limits", 3);
+    limits_run("r3.limits", 3, seg_types);
 }
 
 static void
 group_r2_limits(void)
 {
-    limits_run("r2.limits", 2);
+    limits_run("r2.limits", 2, 0);
 }
 
 static void
 group_r1_limits(void)
 {
-    limits_run("r1.limits", 1);
+    limits_run("r1.limits", 1, 0);
 }
 
 /* SS on the scratch descriptors, then a push and a pop at stack pointers
@@ -140,6 +178,74 @@ group_conforming(void)
     ring_run("conforming", seqs, n, 0, 0, 0);
 }
 
+/* Gates that must fail: INT through a missing gate (#NP), a gate of an
+   invalid type, one whose selector is data or null (#GP), and a 386 trap
+   gate, from rings 0 and 3. Then the IDT's limit: an INT past it is #GP
+   (with the IDT bit in the error code), and a gate only partly inside it
+   counts as outside. Those variants set the limit before the run (arg3)
+   and put it back after. */
+static void
+idt_limit_before(const struct variant *v)
+{
+    ring_setup(v);
+#ifndef HOSTTEST
+    struct {
+        uint16_t limit;
+        uint32_t base;
+    } __attribute__((packed)) idtr = { (uint16_t) v->arg3, (uint32_t) g_idt2 };
+    __asm__ volatile("lidt %0" : : "m"(idtr));
+#endif
+}
+
+static void
+idt_limit_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    struct {
+        uint16_t limit;
+        uint32_t base;
+    } __attribute__((packed)) idtr = { sizeof(g_idt2) - 1, (uint32_t) g_idt2 };
+    __asm__ volatile("lidt %0" : : "m"(idtr));
+#endif
+}
+
+static void
+intgate_idt(const char *name)
+{
+    static const struct {
+        uint8_t  ring, vec;
+        uint16_t limit;
+    } limits[] = {
+        { 0, 0x31, 0x31 * 8 - 1 }, /* 31h just past the limit */
+        { 0, 0x30, 0x31 * 8 - 1 }, /* 30h the last one inside */
+        { 0, 0x30, 0x30 * 8 + 3 }, /* 30h half inside: #GP */
+        { 0, 0x03, 0x31 * 8 - 1 },
+        { 3, 0x31, 0x31 * 8 - 1 }, /* from ring 3 */
+        { 3, 0x30, 0x31 * 8 - 1 },
+    };
+    struct variant v = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                         .fix_input = fix_ring, .arg2 = RF_NONE, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+    for (int r = 0; r <= 3; r += 3) {
+        for (int vec = 0x39; vec <= 0x3d; vec++) {
+            v.target[0]  = 0xcd;
+            v.target[1]  = vec;
+            v.target_len = 2;
+            v.ring       = r;
+            run_plain(&v, 1);
+        }
+    }
+    v.before_run = idt_limit_before;
+    v.after_run  = idt_limit_after;
+    for (unsigned i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
+        v.target[0]  = 0xcd;
+        v.target[1]  = limits[i].vec;
+        v.target_len = 2;
+        v.ring       = limits[i].ring;
+        v.arg3       = limits[i].limit;
+        run_plain(&v, 1);
+    }
+}
+
 /* Interrupt and trap gates whose handlers run in ring 1, 2 or 3 (they
    report CS, ESP, SS and IRET back): from each ring. A gate to an outer
    ring is #GP, as is a DPL-1 gate from ring 2 or 3. */
@@ -154,7 +260,7 @@ group_intgate(void)
             seqs[n++]         = q;
         }
     }
-    ring_run("intgate", seqs, n, 0, 0, 0);
+    ring_run_more("intgate", seqs, n, 0, 0, 0, intgate_idt);
 }
 
 /* From ring 1, returns that may not happen: IRETD and RETF to ring 0,
