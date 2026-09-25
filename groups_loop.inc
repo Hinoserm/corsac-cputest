@@ -143,6 +143,25 @@ static const struct loop_def {
     { "loop.psllw", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xf1, 0xc1) },
     { "loop.pslld", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xf2, 0xc1) },
     { "loop.psllq", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xf3, 0xc1) },
+    { "loop.pi2fd", LK_3DN, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0x0d) },
+    { "loop.pf2id", LK_3DNF, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0x1d) },
+    { "loop.pfcmpge", LK_3DNF, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0x90) },
+    { "loop.pfmin", LK_3DNF, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0x94) },
+    { "loop.pfrcp", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0x96) },
+    { "loop.pfrsqrt", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0x97) },
+    { "loop.pfsub", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0x9a) },
+    { "loop.pfadd", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0x9e) },
+    { "loop.pfcmpgt", LK_3DNF, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0xa0) },
+    { "loop.pfmax", LK_3DNF, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0xa4) },
+    { "loop.pfrcpit1", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0xa6) },
+    { "loop.pfrsqit1", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0xa7) },
+    { "loop.pfsubr", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0xaa) },
+    { "loop.pfacc", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0xae) },
+    { "loop.pfcmpeq", LK_3DNF, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0xb0) },
+    { "loop.pfmul", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0xb4) },
+    { "loop.pfrcpit2", LK_3DNF, 64, 0x000, SEQ(0x0f, 0x0f, 0xc1, 0xb6) },
+    { "loop.pmulhrw", LK_3DN, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0xb7) },
+    { "loop.pavgusb", LK_3DN, 64, 0x001, SEQ(0x0f, 0x0f, 0xc1, 0xbf) },
 };
 
 #define LOOP_N 4096
@@ -432,4 +451,7 @@ GA(group_loop, 90), GA(group_loop, 91), GA(group_loop, 92), GA(group_loop, 93), 
 GA(group_loop, 96), GA(group_loop, 97), GA(group_loop, 98), GA(group_loop, 99), GA(group_loop, 100), GA(group_loop, 101), \
 GA(group_loop, 102), GA(group_loop, 103), GA(group_loop, 104), GA(group_loop, 105), GA(group_loop, 106), GA(group_loop, 107), \
 GA(group_loop, 108), GA(group_loop, 109), GA(group_loop, 110), GA(group_loop, 111), GA(group_loop, 112), GA(group_loop, 113), \
-GA(group_loop, 114), GA(group_loop, 115), GA(group_loop, 116), GA(group_loop, 117),
+GA(group_loop, 114), GA(group_loop, 115), GA(group_loop, 116), GA(group_loop, 117), GA(group_loop, 118), GA(group_loop, 119), \
+GA(group_loop, 120), GA(group_loop, 121), GA(group_loop, 122), GA(group_loop, 123), GA(group_loop, 124), GA(group_loop, 125), \
+GA(group_loop, 126), GA(group_loop, 127), GA(group_loop, 128), GA(group_loop, 129), GA(group_loop, 130), GA(group_loop, 131), \
+GA(group_loop, 132), GA(group_loop, 133), GA(group_loop, 134), GA(group_loop, 135), GA(group_loop, 136),
