@@ -31,6 +31,7 @@ struct kout {
     uint32_t flags;
     uint32_t eax, ecx, edx, ebx, ebp, esi, edi;
     uint32_t fault, fault_ip, fault_err;
+    uint32_t sandbox_crc; /* all of the sandbox, to catch writes outside buf */
     uint8_t  buf[BUF_SIZE];
     uint8_t  lowbuf[LOWBUF_SIZE];
 };
@@ -43,7 +44,13 @@ struct fault {
 };
 
 extern struct cpu_info g_cpu;
-extern uint8_t         g_buf[BUF_SIZE];
+
+/* Memory operands point into the middle of a 16 KB sandbox that is refilled
+   before every run, so a write outside the operand (a wrong address) shows
+   in the result instead of landing in the harness. */
+#define SANDBOX      ((uint8_t *) 0x00300000)
+#define SANDBOX_SIZE 0x4000u
+#define g_buf        (SANDBOX + 0x2000 - BUF_SIZE / 2)
 
 void *memcpy(void *d, const void *s, unsigned n);
 void *memset(void *d, int c, unsigned n);

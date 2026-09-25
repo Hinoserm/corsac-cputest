@@ -299,6 +299,7 @@ arena_init(void)
     g_arena_end  = g_ram_top - 0x100000;
 #ifdef HOSTTEST
     host_arena(ARENA_BASE, g_arena_end - ARENA_BASE);
+    host_arena((uint32_t) SANDBOX, SANDBOX_SIZE);
 #endif
 }
 
@@ -492,6 +493,7 @@ capture(struct kout *o, uint8_t *slot, int vec)
     o->fault    = vec;
     memcpy(o->buf, g_buf, BUF_SIZE);
     memcpy(o->lowbuf, LOWBUF, LOWBUF_SIZE);
+    o->sandbox_crc = crc_add(0, SANDBOX, SANDBOX_SIZE);
     if (vec != 0xff) {
         /* The registers at the fault, not the (unwritten) output record. */
         o->eax      = g_fault.eax;
@@ -581,6 +583,15 @@ report_mismatch(const struct variant *v, const struct kin *in, const struct kout
             puts_("\n");
         }
     }
+    for (int r = 0; r < RUNS; r++) {
+        if (out[r].sandbox_crc != out[0].sandbox_crc || r == 0) {
+            puts_("    run ");
+            putdec(r + 1);
+            puts_(" sandbox crc ");
+            puthex(out[r].sandbox_crc, 8);
+            puts_("\n");
+        }
+    }
 }
 
 /* One variant with one input, run four times from a fresh address. */
@@ -610,6 +621,7 @@ run_variant(const struct variant *v)
     emit_epilogue(&e);
 
     for (int r = 0; r < RUNS; r++) {
+        memset(SANDBOX, 0xa5, SANDBOX_SIZE);
         memcpy(g_buf, in.buf, BUF_SIZE);
         memcpy(LOWBUF, in.lowbuf, LOWBUF_SIZE);
         memset(&g_out, 0, sizeof(g_out));
@@ -667,7 +679,6 @@ group_end(const char *name)
     g_total_mismatches += g_stats.mismatches;
 }
 
-uint8_t g_buf[BUF_SIZE] __attribute__((aligned(64)));
 
 #include "groups.inc"
 
