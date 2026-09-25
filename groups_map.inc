@@ -12,7 +12,9 @@
    - the near Jcc forms, which would jump into the trailer (row 8 runs
      them over a MOV instead);
    - PUSH/POP FS/GS, which unbalance the stack the test returns on;
-   - 0F 38, SMINT on a Cyrix 6x86: into SMM if the BIOS enabled SMIs.
+   - 0F 38, SMINT on a Cyrix 6x86: into SMM if the BIOS enabled SMIs;
+   - 0F CC, BSWAP ESP: it takes no ModRM, so it scrambles the stack the
+     test returns on (bswap covers the other registers).
    And in the memory form only: the bit-string instructions with a
    register offset (they reach anywhere in memory) and LSS (a random SS). */
 static int
@@ -20,7 +22,7 @@ opmap_skip(int op, int mem)
 {
     if (op == 0x07 || op == 0x08 || (op >= 0x22 && op <= 0x27) || (op >= 0x30 && op <= 0x33) || (op >= 0x80 && op <= 0x8f))
         return 1;
-    if (op == 0xa0 || op == 0xa1 || op == 0xa8 || op == 0xa9 || op == 0x38)
+    if (op == 0xa0 || op == 0xa1 || op == 0xa8 || op == 0xa9 || op == 0x38 || op == 0xcc)
         return 1;
     return mem && (op == 0xa3 || op == 0xab || op == 0xb3 || op == 0xbb || op == 0xb2);
 }

@@ -38,9 +38,9 @@ Each copy is placed at an address never used for code before, and run four
 times on the same input. 86Box interprets a new block on its first run,
 interprets it again while compiling it on the second, and runs the compiled
 code from the third on. So runs 1-2 are the interpreter and runs 3-4 are the
-recompiler. Any difference between them stops the test with
-everything needed to see why, and the test stops. On real hardware all four
-runs must be the same too.
+recompiler. Any difference between them stops the test, with everything
+needed to see why (see below). On real hardware all four runs must be the
+same too.
 
 Memory operands point into a 16 KB sandbox that is refilled before every run
 and CRC'd after it, so a wrong address shows up as a wrong result instead of
@@ -90,7 +90,7 @@ between versions until the group itself changes.
 | 35 | `prefixes`    | repeated and ignored prefixes, prefix order, stacked segment overrides, branch hints, and the 15-byte limit (#GP at 16) |
 | 36 | `code16`      | code in a 16-bit protected-mode segment (Windows 3.x/9x, DOS extenders): ALU at 16 and 32 bits, SETcc and Jcc after every producer, every 16-bit address form, MOVZX/MOVSX, PUSH/POP/PUSHF, MUL/DIV edges, string ops over SI/DI, LOOP over CX, near CALL/RET |
 | 37-178 | `loop.<op><size>` | sampled loops, 4096 edge-biased operand sets each, results and flags folded into checksums: ADD OR ADC SBB AND SUB XOR CMP at 16 and 32 bits; INC DEC NEG NOT; ROL ROR RCL RCR SHL SHR SAR by every count; SHLD SHRD; MUL IMUL (one-operand), IMUL r,r/m and IMUL r,r/m,imm; DIV IDIV at 8, 16 and 32 bits, constrained to fit; BSF BSR (non-zero sources); BT BTS BTR BTC with a register offset; XADD CMPXCHG at 8, 16 and 32 bits (a quarter equal); BSWAP; MMX: every arithmetic, logic, compare, pack and unpack instruction; MMX shifts by register, counts at every lane edge; 3DNow! (exact ones in the defined CRC, the rest raw); the K6-2+/K6-III+ 3DNow! extensions |
-| 179-194 | `opmap.0f<row>x` | every 0F xx of the row, register and memory form, behind a trailer that is harmless at any length: which encodings run and which #UD, per model (raw CRC only). INVD, MOV CR/DR/TR, the MSR and counter reads, LOADALL, SMINT (0F 38) and PUSH/POP FS/GS are left out, near Jcc runs over a MOV instead of the trailer, and the memory forms of LSS and the bit-string instructions with a register offset |
+| 179-194 | `opmap.0f<row>x` | every 0F xx of the row, register and memory form, behind a trailer that is harmless at any length: which encodings run and which #UD, per model (raw CRC only). INVD, MOV CR/DR/TR, the MSR and counter reads, LOADALL, SMINT (0F 38), BSWAP ESP (0F CC) and PUSH/POP FS/GS are left out, near Jcc runs over a MOV instead of the trailer, and the memory forms of LSS and the bit-string instructions with a register offset |
 | 195 | `aliases` | undocumented aliases: 82h, TEST /1, SAL /6, LOCK 82h, PREFETCH /2; and the #UD sub-opcodes of 8F, C6, C7, FE, FF |
 | 196 | `cpuid` | the standard, AMD/IDT extended and Centaur leaves, including the brand strings (raw CRC only) |
 | 197 | `msr.map` | which MSRs a model has (P5 test registers and counters, AMD K5/K6, IDT, P6): whether RDMSR faults, values cleared |
