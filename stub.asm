@@ -34,6 +34,7 @@ init:
         ; loop with its own status instead of a hang or a bad table:
         ; 1 read, 2 no such call (CF at once), 3 not "SMAP" back, 4 more
         ; than E820_MAX entries, 5 an entry shorter than 20 bytes.
+        xor     ax, ax                  ; (rprint above left AX 0E20h)
         mov     ds, ax
         mov     es, ax
         mov     dword [E820_AT], 0
@@ -81,15 +82,28 @@ init:
         mov     si, msg_a20
         call    rprint
 
-        ; A20: the BIOS (INT 15h AX=2401h), port 92h (fast A20), then the
-        ; keyboard controller; then a wrap test says whether it took.
+        ; A20, the way Linux does it: on already (many BIOSes leave it so)?
+        ; else the BIOS (INT 15h AX=2401h), port 92h (fast A20), and last
+        ; the keyboard controller, a wrap test after each; the message says
+        ; which one did it. The keyboard controller only when the others
+        ; didn't: some boards (ASUS with Award Medallion 6.0) reset soon
+        ; after its output port is written.
+        mov     si, msg_a20_was
+        call    a20_on
+        jnc     .a20_ok
         mov     ax, 0x2401
         int     0x15
         cli
+        mov     si, msg_a20_bios
+        call    a20_on
+        jnc     .a20_ok
         in      al, 0x92
         or      al, 0x02
         and     al, 0xfe
         out     0x92, al
+        mov     si, msg_a20_92
+        call    a20_on
+        jnc     .a20_ok
         call    kbc_wait
         mov     al, 0xd1
         out     0x64, al
@@ -97,8 +111,8 @@ init:
         mov     al, 0xdf
         out     0x60, al
         call    kbc_wait
+        mov     si, msg_a20_kbc
         call    a20_on
-        mov     si, msg_on
         jnc     .a20_ok
         mov     si, msg_off
         call    rprint
@@ -206,7 +220,10 @@ a20_on:
 
 msg_map db "CPUTEST: memory map ", 0
 msg_a20 db ", A20 ", 0
-msg_on  db "on", 0
+msg_a20_was  db "on already", 0
+msg_a20_bios db "on by the BIOS", 0
+msg_a20_92   db "on by port 92h", 0
+msg_a20_kbc  db "on by the keyboard controller", 0
 msg_off db "OFF: cannot run", 13, 10, 0
 msg_pm  db ", protected mode", 13, 10, 0
 
