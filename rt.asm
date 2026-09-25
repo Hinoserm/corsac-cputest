@@ -14,6 +14,13 @@ global  g_fault
 global  gdt
 global  isr_48
 global  g_in_kernel
+global  irq_table
+global  g_irq_hits
+global  g_irq_log
+global  g_irq_nlog
+global  g_irq_eip
+global  g_irq_eoi
+extern  g_lapic
 extern  harness_fault
 
 section .text.entry
@@ -161,8 +168,63 @@ isr_common:
         hlt
         jmp     .halt
 
+; Interrupts for the APIC groups (their own IDT): vectors 20h-FFh and NMI
+; count, log their order, keep the interrupted EIP, and EOI the local APIC
+; if g_irq_eoi says so (never for NMI or the spurious vector FFh).
+%macro IRQ 1
+irq_%1:
+        push    dword %1
+        jmp     irq_common
+%endmacro
+
+%assign i 32
+%rep 224
+IRQ i
+%assign i i+1
+%endrep
+IRQ 2
+
+irq_common:
+        pushad
+        mov     eax, [esp + 32]         ; the vector
+        inc     dword [g_irq_hits + eax * 4]
+        mov     ecx, [g_irq_nlog]
+        cmp     ecx, 16
+        jae     .logged
+        mov     [g_irq_log + ecx * 4], eax
+        inc     dword [g_irq_nlog]
+.logged:
+        mov     ecx, [esp + 36]         ; the interrupted EIP
+        mov     [g_irq_eip], ecx
+        cmp     eax, 2
+        je      .done
+        cmp     eax, 0xff
+        je      .done
+        cmp     dword [g_irq_eoi], 0
+        je      .done
+        mov     ecx, [g_lapic]
+        xor     edx, edx
+        xchg    [ecx + 0xb0], edx       ; EOI
+.done:
+        popad
+        add     esp, 4
+        iretd
+
 section .rodata
         align   4
+irq_table:                              ; 256 entries: 0 where the harness's own handler stays
+%assign i 0
+%rep 256
+%if i >= 32
+        dd      irq_ %+ i
+%elif i == 2
+        dd      irq_2
+%else
+        dd      0
+%endif
+%assign i i+1
+%endrep
+
 isr_table:
 %assign i 0
 %rep 32
@@ -197,6 +259,11 @@ FAULT_EDI       equ 40
 
 section .bss
         alignb  16
+g_irq_hits:     resd 256
+g_irq_log:      resd 16
+g_irq_nlog:     resd 1
+g_irq_eip:      resd 1
+g_irq_eoi:      resd 1
 g_saved_esp:
         resd    1
 g_fault:

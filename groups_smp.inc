@@ -95,8 +95,8 @@ group_mp_table(void)
 /* This processor's local APIC: at APIC_BASE (MSR 1Bh) on a P6, where a
    BIOS that cleared its enable bit has turned it off until reset (0);
    at FEE00000h on a Pentium, where CPUID says whether it was strapped
-   on. */
-static uint32_t g_lapic;
+   on. Global: the interrupt handlers in rt.asm EOI through it. */
+uint32_t g_lapic;
 
 static int
 lapic_find(void)
@@ -275,6 +275,189 @@ group_apic_regs(void)
         lapic_restore();
     }
     for (int i = 0; i < 5; i++)
+        run_facts(&v, f[i]);
+    group_end(name);
+#endif
+}
+
+/* ---- interrupts through the local APIC -------------------------------------- */
+
+#ifndef HOSTTEST
+extern uint32_t          irq_table[256], isr_table[32];
+extern volatile uint32_t g_irq_hits[256], g_irq_log[16], g_irq_nlog, g_irq_eip, g_irq_eoi;
+
+struct dtr {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed));
+
+/* The APIC groups' own IDT: the harness's exception handlers for 0-31
+   (a fault in a group is a harness fault), rt.asm's counting handlers for
+   NMI and 20h-FFh. */
+static struct idt_entry g_idt_apic[256] __attribute__((aligned(8)));
+static struct dtr       g_idt_saved;
+
+static void
+apic_idt_on(void)
+{
+    for (int i = 0; i < 256; i++) {
+        uint32_t a            = irq_table[i] ? irq_table[i] : isr_table[i];
+        g_idt_apic[i].off_lo = a & 0xffff;
+        g_idt_apic[i].off_hi = a >> 16;
+        g_idt_apic[i].sel    = 0x08;
+        g_idt_apic[i].zero   = 0;
+        g_idt_apic[i].type   = 0x8e;
+    }
+    struct dtr d = { sizeof(g_idt_apic) - 1, (uint32_t) g_idt_apic };
+    __asm__ volatile("sidt %0\n\tlidt %1" : "=m"(g_idt_saved) : "m"(d) : "memory");
+    for (int i = 0; i < 256; i++)
+        g_irq_hits[i] = 0;
+    g_irq_nlog = 0;
+    g_irq_eoi  = 1;
+}
+
+static void
+apic_idt_off(void)
+{
+    __asm__ volatile("cli\n\tlidt %0" : : "m"(g_idt_saved) : "memory");
+}
+
+/* A moment with interrupts on: what is pending is taken. */
+static void
+irq_window(void)
+{
+    __asm__ volatile("sti\n\tnop\n\tnop\n\tnop\n\tcli" : : : "memory");
+}
+
+static int
+irr_bit(unsigned vec)
+{
+    return (lapic_rd(0x200 + (vec >> 5) * 0x10) >> (vec & 31)) & 1;
+}
+
+static int
+icr_idle(void)
+{
+    for (int spin = 0; spin < 1000000; spin++)
+        if (!(lapic_rd(LAPIC_ICRLO) & 0x1000))
+            return 1;
+    return 0;
+}
+
+static void
+self_ipi(unsigned vec)
+{
+    lapic_wr(LAPIC_ICRHI, 0);
+    lapic_wr(LAPIC_ICRLO, 0x00044000u | vec); /* fixed, edge, the self shorthand */
+    icr_idle();
+}
+#endif
+
+/* Interrupts on the boot processor, through its local APIC (IPIs to
+   itself and its timer), with the APIC groups' IDT:
+   1. a self-IPI taken at once; two held with IF clear (both in IRR),
+      then taken highest class first;
+   2. TPR 50h holding a class-4 vector pending (PPR 50h), released when
+      TPR drops; no spurious vector (FFh) taken;
+   3. the timer: one-shot delivers once, periodic more than once in the
+      same 2 ms; then HLT woken by it returns past the HLT;
+   4. the STI shadow: a pending IPI waits for the instruction after STI
+      (the handler sees EIP past the first of two INCs); an NMI sent to its
+      own APIC ID is taken, and still with port 70h's NMI-disable bit set
+      (that gates only the board's NMI pin). */
+static void
+group_apic_irq(void)
+{
+    const char *name = "apic.irq";
+#ifdef HOSTTEST
+    group_skip(name, "the local APIC (host build)");
+#else
+    struct variant v = { .group = name };
+    if (!lapic_find()) {
+        group_skip(name, "no local APIC, or disabled");
+        return;
+    }
+    group_begin(name);
+    uint32_t f[4][5] = { { 0 } };
+    if (!g_counting) {
+        uint32_t id = lapic_rd(LAPIC_ID) >> 24;
+        lapic_save();
+        apic_idt_on();
+        lapic_wr(LAPIC_SVR, 0x1ff);
+        lapic_wr(LAPIC_TPR, 0);
+
+        self_ipi(0x41);
+        irq_window();
+        f[0][0] = g_irq_hits[0x41];
+        g_irq_nlog = 0;
+        self_ipi(0x41);
+        self_ipi(0x81);
+        f[0][1] = irr_bit(0x41);
+        f[0][2] = irr_bit(0x81);
+        irq_window();
+        f[0][3] = g_irq_log[0];
+        f[0][4] = g_irq_log[1];
+
+        g_irq_hits[0x41] = 0;
+        lapic_wr(LAPIC_TPR, 0x50);
+        self_ipi(0x41);
+        irq_window();
+        f[1][0] = g_irq_hits[0x41];
+        f[1][1] = irr_bit(0x41);
+        f[1][3] = lapic_rd(LAPIC_PPR) & 0xff;
+        lapic_wr(LAPIC_TPR, 0);
+        irq_window();
+        f[1][2] = g_irq_hits[0x41];
+
+        lapic_wr(LAPIC_TDCR, 0x0b); /* divide by 1 */
+        lapic_wr(LAPIC_TIMER, 0x60);
+        lapic_wr(LAPIC_TICR, 20000);
+        __asm__ volatile("sti" : : : "memory");
+        int ok = delay_us(2000);
+        __asm__ volatile("cli" : : : "memory");
+        f[2][0] = g_irq_hits[0x60];
+        lapic_wr(LAPIC_TIMER, 0x20060); /* periodic */
+        lapic_wr(LAPIC_TICR, 20000);
+        g_irq_hits[0x60] = 0;
+        __asm__ volatile("sti" : : : "memory");
+        ok &= delay_us(2000);
+        __asm__ volatile("cli" : : : "memory");
+        lapic_wr(LAPIC_TICR, 0);
+        f[2][1] = g_irq_hits[0x60] >= 2;
+        f[2][3] = ok;
+        if (f[2][0] == 1) { /* only with a timer that fires: nothing else wakes the HLT */
+            uint32_t label;
+            lapic_wr(LAPIC_TIMER, 0x60);
+            lapic_wr(LAPIC_TICR, 20000);
+            __asm__ volatile("movl $1f, %0\n\tsti\n\thlt\n1:\tcli" : "=r"(label) : : "memory");
+            f[2][2] = g_irq_eip == label;
+            lapic_wr(LAPIC_TICR, 0);
+        } else
+            f[2][2] = 2;
+
+        uint32_t label, n = 0;
+        self_ipi(0x42);
+        __asm__ volatile("sti\n\tincl %0\n1:\tincl %0\n\tcli\n\tmovl $1b, %1" : "+r"(n), "=&r"(label) : : "memory");
+        f[3][0] = g_irq_eip == label;
+        f[3][1] = n;
+        lapic_wr(LAPIC_ICRHI, id << 24);
+        lapic_wr(LAPIC_ICRLO, 0x00004400); /* NMI to its own ID */
+        icr_idle();
+        delay_us(100);
+        f[3][2] = g_irq_hits[2];
+        outb(0x70, 0x8d);                  /* the board's NMI off */
+        lapic_wr(LAPIC_ICRHI, id << 24);
+        lapic_wr(LAPIC_ICRLO, 0x00004400);
+        icr_idle();
+        delay_us(100);
+        outb(0x70, 0x0d);
+        f[3][3] = g_irq_hits[2];
+        f[1][4] = g_irq_hits[0xff];
+
+        apic_idt_off();
+        lapic_restore();
+    }
+    for (int i = 0; i < 4; i++)
         run_facts(&v, f[i]);
     group_end(name);
 #endif

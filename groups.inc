@@ -574,6 +574,7 @@ static const struct group_def groups[] = {
     G(group_syscall),
     G(group_mp_table),
     G(group_apic_regs),
+    G(group_apic_irq),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
