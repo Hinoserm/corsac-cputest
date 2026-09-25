@@ -113,6 +113,7 @@ between versions until the group itself changes.
 | 214 | `r3.popf` | POPF at CPL 3: IOPL never changes, IF only at IOPL 3, AC always |
 | 215 | `r3.ac` | the alignment check (CR0.AM, EFLAGS.AC) at CPL 3: #AC(0) for misaligned words, dwords and stack pushes |
 | 216 | `r3.seg` | segment loads at CPL 3 (DPL and RPL rules, SS, system descriptors, null) and LAR/VERR/VERW |
+| 217 | `r3.gates` | call gates of every DPL (and into ring 1), parameter copying, conforming code, direct and JMP transfers that must #GP |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
