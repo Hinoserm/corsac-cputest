@@ -494,6 +494,7 @@ static const struct group_def groups[] = {
     G(group_r1_popseg),
     G(group_gateparams),
     G(group_tf_step),
+    G(group_tf_shadow),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
