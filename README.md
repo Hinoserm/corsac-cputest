@@ -183,6 +183,7 @@ between versions until the group itself changes.
 | 284 | `lar.systypes` | LAR, LSL and VERR of each of the 16 system descriptor types |
 | 285 | `seg.types` | each of the 16 code/data types at DPL 0 from ring 0 and DPL 3 from ring 3: VERR, VERW, a load into FS, a read and a write |
 | 286 | `idt.types` | INT through a not-present gate, a gate of type 0, a 386 trap gate, gates with a data or null selector, from rings 0 and 3 |
+| 287 | `idt.limit` | INT past a shortened IDT's limit, and to a gate only half inside it (#GP with the IDT bit), from rings 0 and 3 |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

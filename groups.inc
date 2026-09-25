@@ -528,6 +528,7 @@ static const struct group_def groups[] = {
     G(group_lar_systypes),
     G(group_seg_types),
     G(group_idt_types),
+    G(group_idt_limit),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

@@ -488,3 +488,62 @@ group_idt_types(void)
         }
     ring_run("idt.types", seqs, n, 0, 0, 0);
 }
+
+/* The IDT's limit: an INT past it is #GP (with the IDT bit in the error
+   code), and a gate only partly inside it counts as outside. Variants set
+   the limit before the run (arg3: the limit) and put it back after. */
+static void
+idt_limit_before(const struct variant *v)
+{
+    ring_setup(v);
+#ifndef HOSTTEST
+    struct {
+        uint16_t limit;
+        uint32_t base;
+    } __attribute__((packed)) idtr = { (uint16_t) v->arg3, (uint32_t) g_idt2 };
+    __asm__ volatile("lidt %0" : : "m"(idtr));
+#endif
+}
+
+static void
+idt_limit_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    struct {
+        uint16_t limit;
+        uint32_t base;
+    } __attribute__((packed)) idtr = { sizeof(g_idt2) - 1, (uint32_t) g_idt2 };
+    __asm__ volatile("lidt %0" : : "m"(idtr));
+#endif
+}
+
+static void
+group_idt_limit(void)
+{
+    static const struct {
+        uint8_t  ring, vec;
+        uint16_t limit;
+    } cases[] = {
+        { 0, 0x31, 0x31 * 8 - 1 }, /* 31h just past the limit */
+        { 0, 0x30, 0x31 * 8 - 1 }, /* 30h the last one inside */
+        { 0, 0x30, 0x30 * 8 + 3 }, /* 30h half inside: #GP */
+        { 0, 0x03, 0x31 * 8 - 1 },
+        { 3, 0x31, 0x31 * 8 - 1 }, /* from ring 3 */
+        { 3, 0x30, 0x31 * 8 - 1 },
+    };
+    struct variant v = { .group = "idt.limit", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = idt_limit_before,
+                         .after_run = idt_limit_after, .fix_input = fix_ring, .fx = FX_CUSTOM, .defmask = dm_fxarg,
+                         .fx_arg = 1 };
+    if (!ring_begin(v.group, 0, 0))
+        return;
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        v.target[0]  = 0xcd;
+        v.target[1]  = cases[i].vec;
+        v.target_len = 2;
+        v.ring       = cases[i].ring;
+        v.arg3       = cases[i].limit;
+        v.arg2       = RF_NONE;
+        run_plain(&v, 1);
+    }
+    ring_end(v.group, 0, 0);
+}
