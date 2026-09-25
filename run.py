@@ -65,12 +65,12 @@ fdd_02_type = none
 
 {attach}"""
 
-# The CF-card image as the primary IDE disk: 16 MB, 64 cylinders, 16 heads,
+# The CF-card image as the primary IDE disk: 15 MB, 60 cylinders, 16 heads,
 # 32 sectors.
 ATTACH_IMG = """[Hard disks]
 hdd_01_fn = {img}
 hdd_01_ide_channel = 0:0
-hdd_01_parameters = 32, 16, 64, 0, ide
+hdd_01_parameters = 32, 16, 60, 0, ide
 """
 
 

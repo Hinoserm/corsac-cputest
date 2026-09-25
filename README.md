@@ -3,8 +3,8 @@
 A bare-metal x86 CPU accuracy test. I use it to check 86Box's recompiler
 against its interpreter, and both against real CPUs, from the 486 up.
 
-It runs with no OS at all, from **`build/cputest.img`**: a 16 MB disk
-image. Write it to a CF card or a hard disk and boot it; the boot sector
+It runs with no OS at all, from **`build/cputest.img`**: a 15 MB disk
+image (it fits a card sold as 16 MB). Write it to a CF card or a hard disk and boot it; the boot sector
 loads the test and starts it. In 86Box, attach it as the primary IDE disk.
 
 Output goes to COM1 at 115200 8N1, and to the screen. The top line of the

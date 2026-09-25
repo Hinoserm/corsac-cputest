@@ -79,7 +79,8 @@ def main():
     boot = open(os.path.join(OUT, "boot.bin"), "rb").read()
     assert len(boot) == 512 and boot[510:] == b"\x55\xaa"
     img = boot + bytes(loader)
-    img += bytes((16 << 20) - len(img))  # 16 MB; dd writes it to the start of the card
+    # 15 MB (30720 sectors): fits a card sold as 16 MB, which holds fewer.
+    img += bytes((15 << 20) - len(img))
     path = os.path.join(OUT, "cputest.img")
     open(path, "wb").write(img)
     print("%s: %d bytes" % (path, len(img)))
