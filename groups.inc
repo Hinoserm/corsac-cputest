@@ -513,6 +513,7 @@ static const struct group_def groups[] = {
     G(group_desc_accessed),
     G(group_ldt_load),
     G(group_ldt_seg),
+    G(group_ldt_gate),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
