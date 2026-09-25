@@ -90,3 +90,37 @@ group_lock_legal(void)
     }
     group_end(name);
 }
+
+/* ---- segment overrides -------------------------------------------------------- */
+
+/* CS: reads (a readable code segment) but can't write; SS: and ES: are
+   data; a null FS faults on use; a 64 KB segment ends before the buffer;
+   with two overrides the last counts. */
+static void
+group_segovr(void)
+{
+    static const struct {
+        uint8_t len, b[12];
+    } seqs[] = {
+        { SEQ(0x2e, 0x89, 0x03) },                               /* mov cs:[ebx], eax: #GP */
+        { SEQ(0x2e, 0x8b, 0x03) },                               /* mov eax, cs:[ebx] */
+        { SEQ(0x36, 0x8b, 0x03) },                               /* ss: */
+        { SEQ(0x26, 0x89, 0x0b) },                               /* es: write */
+        { SEQ(0x66, 0xb8, 0x00, 0x00, 0x8e, 0xe0, 0x64, 0x8b, 0x03) }, /* fs = 0; fs: read: #GP */
+        { SEQ(0x66, 0xb8, 0x00, 0x00, 0x8e, 0xe0, 0x64, 0x89, 0x0b) }, /* fs: write */
+        { SEQ(0x66, 0xb8, 0x20, 0x00, 0x8e, 0xe0, 0x64, 0x8b, 0x03) }, /* fs = 64 KB data: past its limit */
+        { SEQ(0x89, 0xde, 0x2e, 0xad) },                         /* lodsd from cs: */
+        { SEQ(0x3e, 0x2e, 0x89, 0x03) },                         /* ds: cs: write: CS counts */
+        { SEQ(0x2e, 0x3e, 0x89, 0x03) },                         /* cs: ds: write: DS counts */
+        { SEQ(0x64, 0x65, 0x8b, 0x03) },                         /* fs: gs: read */
+    };
+    const char    *name = "segovr";
+    struct variant v    = { .group = name, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        run_plain(&v, 1);
+    }
+    group_end(name);
+}
