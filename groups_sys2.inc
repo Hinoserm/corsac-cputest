@@ -444,3 +444,78 @@ group_r3_pde(void)
 #endif
     ring_end(name, 0, 0);
 }
+
+/* ---- the Cyrix EMMI extension (6x86MX, MII) --------------------------------------------------------- */
+
+/* The extended MMX instructions at 0F 50-5E, enabled by CCR7 bit 0 (with
+   MAPEN in CCR3 to reach it) and #UD without it. Register forms where
+   they exist, memory for all. arg2: enabled. */
+#ifndef HOSTTEST
+static uint8_t
+cx_read(uint8_t i)
+{
+    outb(0x22, i);
+    return inb(0x23);
+}
+
+static void
+cx_write(uint8_t i, uint8_t val)
+{
+    outb(0x22, i);
+    outb(0x23, val);
+}
+
+static void
+emmi_set(int on)
+{
+    uint8_t ccr3 = cx_read(0xc3);
+    cx_write(0xc3, (ccr3 & 0x0f) | 0x10); /* MAPEN */
+    uint8_t ccr7 = cx_read(0xeb);
+    cx_write(0xeb, on ? ccr7 | 1 : ccr7 & ~1);
+    cx_write(0xc3, ccr3);
+}
+
+static void
+emmi_before(const struct variant *v)
+{
+    emmi_set(v->arg2);
+}
+#endif
+
+static void
+group_cyrix_emmi(void)
+{
+    static const uint8_t regops[] = { 0x50, 0x51, 0x52, 0x55, 0x59, 0x5d }; /* paveb paddsiw pmagw psubsiw pmulhrw pmulhriw */
+    static const uint8_t memops[] = { 0x54, 0x58, 0x5a, 0x5b, 0x5c, 0x5e }; /* pdistib pmvzb pmvnzb pmvlzb pmvgezb pmachriw */
+    static const uint8_t pairs[3][2] = { { 0, 1 }, { 3, 5 }, { 6, RM_MEM } };
+    const char          *name        = "cyrix.emmi";
+    struct variant       v           = { .group = name, .mmx = 1, .faults_ok = 1, .arg = MEM_OFF };
+    if (!g_cpu.cyrix || !(g_cpu.features & CPUID_MMX)) {
+        group_skip(name, "not a Cyrix with MMX");
+        return;
+    }
+#ifndef HOSTTEST
+    v.before_run = emmi_before;
+#endif
+    group_begin(name);
+    for (int on = 1; on >= 0; on--) {
+        v.arg2 = on;
+        for (unsigned o = 0; o < sizeof(regops) + sizeof(memops); o++) {
+            int mem_only = o >= sizeof(regops);
+            for (int p = mem_only ? 2 : 0; p < 3; p++) {
+                v.target[0]  = 0x0f;
+                v.target[1]  = mem_only ? memops[o - sizeof(regops)] : regops[o];
+                v.target_len = put_mm_modrm(v.target, 2, pairs[p][0], pairs[p][1]);
+                v.fix_input  = pairs[p][1] == RM_MEM ? fix_mem_ebx : 0;
+                run_plain(&v, on ? 2 : 1);
+                if (!on)
+                    break; /* disabled: one form is enough */
+            }
+        }
+    }
+#ifndef HOSTTEST
+    if (!g_counting)
+        emmi_set(0);
+#endif
+    group_end(name);
+}

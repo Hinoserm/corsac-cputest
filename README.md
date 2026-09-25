@@ -196,6 +196,7 @@ between versions until the group itself changes.
 | 297 | `pg.pde` | the alias page through a read-only or not-present PDE (WP): reads, writes, CR2, and the PDE's and PTE's A and D bits |
 | 298 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
 | 299 | `r3.pde` | the alias page from rings 1-3 with the PDE or PTE supervisor-only, the PDE read-only or not present |
+| 300 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
