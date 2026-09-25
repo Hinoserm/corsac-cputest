@@ -91,6 +91,7 @@ static const struct loop_def {
     { "loop.cmpxchg16", LK_CMPXCHG, 16, 0x8d5, SEQ(0x66, 0x0f, 0xb1, 0xcb) },
     { "loop.xadd32", LK_PLAIN, 32, 0x8d5, SEQ(0x0f, 0xc1, 0xd8) },
     { "loop.cmpxchg32", LK_CMPXCHG, 32, 0x8d5, SEQ(0x0f, 0xb1, 0xcb) },
+    { "loop.bswap", LK_PLAIN, 32, 0x0c5, SEQ(0x0f, 0xc8) },
 };
 
 #define LOOP_N 4096
@@ -266,4 +267,4 @@ GA(group_loop, 48), GA(group_loop, 49), GA(group_loop, 50), GA(group_loop, 51), 
 GA(group_loop, 54), GA(group_loop, 55), GA(group_loop, 56), GA(group_loop, 57), GA(group_loop, 58), GA(group_loop, 59), \
 GA(group_loop, 60), GA(group_loop, 61), GA(group_loop, 62), GA(group_loop, 63), GA(group_loop, 64), GA(group_loop, 65), \
 GA(group_loop, 66), GA(group_loop, 67), GA(group_loop, 68), GA(group_loop, 69), GA(group_loop, 70), GA(group_loop, 71), \
-GA(group_loop, 72),
+GA(group_loop, 72), GA(group_loop, 73),
