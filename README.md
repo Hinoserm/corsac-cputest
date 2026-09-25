@@ -13,7 +13,11 @@ It runs with no OS at all, from either of these:
 
 Output goes to COM1 at 115200 8N1, and to the screen. The top line of the
 screen shows live status. The first line out is `CPUTEST <version>`, then
-the CPU's vendor, signature and feature flags.
+the CPU's vendor, signature and feature flags, and CR0 as the BIOS left it
+and as the tests run. The test turns the CPU's cache on (clears CR0.CD and
+NW): BIOSes call option ROMs with it off, and 86Box doesn't compile code
+while it is off, so without this a ROM-card run only tests the
+interpreter.
 
 ## Running it on real hardware
 

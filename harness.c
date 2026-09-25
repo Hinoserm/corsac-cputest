@@ -1245,6 +1245,18 @@ cmain(uint32_t rom_base)
     cpu_detect();
     ram_detect();
     arena_init();
+#ifndef HOSTTEST
+    /* The BIOS calls option ROMs with the cache disabled (CR0.CD), and
+       86Box interprets everything while it is: turn it on for the tests.
+       WBINVD exists from the 486 on. */
+    uint32_t cr0_boot, cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0_boot));
+    if (g_cpu.is486)
+        __asm__ volatile("wbinvd" ::: "memory");
+    cr0 = cr0_boot & ~((1u << 30) | (1u << 29)); /* CD, NW */
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+#endif
 
     puts_("\nCPUTEST 3 rom=");
     puthex(rom_base, 5);
@@ -1259,6 +1271,12 @@ cmain(uint32_t rom_base)
         puthex(g_cpu.features, 8);
     } else
         puts_(g_cpu.is486 ? "486-no-cpuid" : "386");
+#ifndef HOSTTEST
+    puts_(" cr0=");
+    puthex(cr0_boot, 8);
+    puts_("->");
+    puthex(cr0, 8);
+#endif
     puts_("\n");
 
     /* The ROM and the disk image go round again when they finish, for
