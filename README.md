@@ -142,6 +142,7 @@ between versions until the group itself changes.
 | 243 | `r2.limits` | the same at CPL 2 |
 | 244 | `r1.limits` | the same at CPL 1 |
 | 245 | `r3.ss` | SS on those descriptors at CPL 3, a push and pop either side of the limit: #SS, #GP, expand-down and 16-bit stacks |
+| 246 | `r1.ss` | the same at CPL 1 |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
