@@ -79,13 +79,6 @@ def main():
     open(path, "wb").write(img)
     print("%s: %d bytes" % (path, len(img)))
 
-    # The image that gets committed: output/ holds the latest runnable build.
-    if "--dump" not in sys.argv:
-        os.makedirs(os.path.join(HERE, "output"), exist_ok=True)
-        path = os.path.join(HERE, "output", "cputest.img")
-        open(path, "wb").write(img)
-        print("%s: %d bytes" % (path, len(img)))
-
 
 if __name__ == "__main__":
     main()
