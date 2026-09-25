@@ -101,6 +101,7 @@ between versions until the group itself changes.
 | 197 | `msr.map` | which MSRs a model has (P5 test registers and counters, AMD K5/K6, IDT, P6): whether RDMSR faults, values cleared |
 | 198 | `tsc.write` | WRMSR to the TSC with the upper half set, read back: which models write all 64 bits |
 | 199 | `cyrix.dir` | the Cyrix DIR0/DIR1 and CCR0-3 through ports 22h/23h, only on a CPU the 5/2 test or CPUID calls a Cyrix |
+| 200 | `pg.basic`    | with paging on (identity map, 4 KB pages): loads, stores, RMW, XADD/XCHG and PUSH/POP to memory, misaligned across a page boundary |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -156,6 +157,8 @@ DONE   pass=N tests= mismatches= arena_wraps= PASS|FAIL
   results. Compare this one between different CPU models, emulated or real.
   In `exhaust8` the loop folds only the defined flags into EBP, which goes
   into this CRC.
+  With paging on, a #PF's `fault_err` is the error code plus CR2 (relative
+  to the buffer) shifted left 8.
 - `crc_raw`: the same results with nothing masked (in `exhaust8`, EDI's
   checksum of all the flags). Compare this one only
   against the **same** CPU model; it catches undefined-flag behaviour that
@@ -217,6 +220,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_code16.inc` | group 36: 16-bit protected-mode code                   |
 | `groups_loop.inc` | groups 37-178: sampled loops, one instruction each        |
 | `groups_map.inc` | groups 179-194: the 0F opcode map                          |
+| `groups_cpu.inc` | groups 195-199: aliases, CPUID, MSRs, the TSC, Cyrix       |
+| `groups_paging.inc` | groups 200 on: paging                                   |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

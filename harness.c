@@ -358,6 +358,8 @@ arena_init(void)
     g_sandbox    = (uint8_t *) host_map(0x00300000, SANDBOX_SIZE);
 #else
     g_arena_end = g_ram_top - 0x100000;
+    if (g_arena_end > 0x10000000) /* the paging groups map the first 256 MB */
+        g_arena_end = 0x10000000;
 #endif
     g_arena_next = g_arena_base;
 }
@@ -569,6 +571,8 @@ struct variant {
     uint8_t       reg_fix;       /* fix_input sets registers only: no sandbox refill */
     uint8_t       mmx;           /* MM0-MM7 loaded from g_mmx_in, stored to g_mmx_out */
     uint8_t       code16;        /* producer and target run in a 16-bit code segment */
+    uint8_t       paging;        /* #PF: fault_err = error code | (CR2 - buffer) << 8 */
+    void        (*before_run)(const struct variant *v); /* before each of the four runs */
     void        (*emit)(struct emit *e, const struct variant *v); /* instead of target[] */
     defmask_fn    defmask;
 };
@@ -767,9 +771,20 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
         o->esi      = g_fault.esi;
         o->edi      = g_fault.edi;
         o->flags    = g_fault.eflags & fmask;
-        /* In 16-bit code the IP is already relative to the code. */
+        /* In 16-bit code the IP is already relative to the code; a fault
+           at an address in the sandbox is given relative to the buffer
+           (bit 31 set), so it compares across machines. */
         o->fault_ip = v->code16 ? g_fault.eip : g_fault.eip - (uint32_t) slot;
+        if (!v->code16 && g_fault.eip >= (uint32_t) SANDBOX && g_fault.eip < (uint32_t) SANDBOX + SANDBOX_SIZE)
+            o->fault_ip = 0x80000000u | (g_fault.eip - (uint32_t) g_buf);
         o->fault_err = g_fault.err;
+#ifndef HOSTTEST
+        if (v->paging && vec == 14) {
+            uint32_t cr2;
+            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+            o->fault_err = (g_fault.err & 0xff) | ((cr2 - (uint32_t) g_buf) << 8);
+        }
+#endif
     }
 }
 
@@ -1006,6 +1021,8 @@ run_variant(const struct variant *v)
         memcpy(LOWBUF, in.lowbuf, LOWBUF_SIZE);
         memset(&g_out, 0, sizeof(g_out));
         memset(g_mmx_out, 0, sizeof(g_mmx_out));
+        if (v->before_run)
+            v->before_run(v);
         int vec = run_kernel(slot);
         capture(v, &out[r], slot, vec, mem);
         if (v->mmx)
