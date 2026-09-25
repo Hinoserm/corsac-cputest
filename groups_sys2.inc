@@ -519,3 +519,61 @@ group_cyrix_emmi(void)
 #endif
     group_end(name);
 }
+
+/* ---- segment overrides on string instructions ---------------------------------------------------------- */
+
+/* An override moves the source (DS:ESI) but never the destination
+   (ES:EDI): with FS the 64 KB segment, MOVS, LODS and CMPS through it
+   fault and STOS and SCAS don't; with ES null, STOS and MOVS fault and
+   LODS doesn't, and an ES: override on the source faults; a REP with
+   ECX = 0 checks nothing. ES is put back in the sequence. arg2: ECX 0. */
+static void
+fix_strseg(const struct variant *v)
+{
+    g_in.esi = (uint32_t) g_buf;
+    g_in.edi = (uint32_t) g_buf + 32;
+    g_in.ecx = v->arg2 ? 0 : 4;
+    g_in.flags &= ~0x400u;
+}
+
+#define FS20 0x66, 0xb8, 0x20, 0x00, 0x8e, 0xe0 /* fs = 64 KB data */
+#define ES00 0x66, 0xb8, 0x00, 0x00, 0x8e, 0xc0 /* es = null */
+#define ES20 0x66, 0xb8, 0x20, 0x00, 0x8e, 0xc0 /* es = 64 KB data */
+#define ES10 0x6a, 0x10, 0x07                   /* push 10h; pop es */
+
+static void
+group_string_segs(void)
+{
+    static const struct {
+        uint8_t ecx0, len, b[16];
+    } seqs[] = {
+        { 0, SEQ(FS20, 0x64, 0xa4) },             /* fs: movsb */
+        { 0, SEQ(FS20, 0x64, 0xaa) },             /* fs: stosb: ES:EDI still */
+        { 0, SEQ(FS20, 0xf3, 0x64, 0xa4) },       /* rep fs: movsb */
+        { 1, SEQ(FS20, 0xf3, 0x64, 0xa4) },       /* ECX = 0 */
+        { 0, SEQ(FS20, 0x64, 0xae) },             /* fs: scasb */
+        { 0, SEQ(FS20, 0x64, 0xa6) },             /* fs: cmpsb */
+        { 0, SEQ(FS20, 0x64, 0xac) },             /* fs: lodsb */
+        { 0, SEQ(ES00, 0xac, ES10) },             /* lodsb with ES null */
+        { 0, SEQ(ES00, 0xaa, ES10) },             /* stosb */
+        { 0, SEQ(ES00, 0xa4, ES10) },             /* movsb */
+        { 1, SEQ(ES00, 0xf3, 0xaa, ES10) },       /* rep stosb, ECX = 0 */
+        { 0, SEQ(ES00, 0x26, 0xac, ES10) },       /* es: lodsb */
+        { 0, SEQ(ES20, 0xf3, 0xaa, ES10) },       /* rep stosb past ES's limit */
+    };
+    const char    *name = "string.segs";
+    struct variant v    = { .group = name, .faults_ok = 1, .fix_input = fix_strseg,
+                            .norm = (1 << R_ESI) | (1 << R_EDI) };
+#ifdef HOSTTEST
+    group_skip(name, "segment loads (host build)");
+    return;
+#endif
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.arg2       = seqs[i].ecx0;
+        run_keep(&v, 1);
+    }
+    group_end(name);
+}

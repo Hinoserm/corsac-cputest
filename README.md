@@ -197,6 +197,7 @@ between versions until the group itself changes.
 | 298 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
 | 299 | `r3.pde` | the alias page from rings 1-3 with the PDE or PTE supervisor-only, the PDE read-only or not present |
 | 300 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
+| 301 | `string.segs` | segment overrides move the string source, never ES:EDI; null ES; REP with ECX 0 checks nothing; REP STOS past ES's limit |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
