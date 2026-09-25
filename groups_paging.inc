@@ -20,8 +20,8 @@
 #define PDE_PS 0x080u
 /* The alias page's first dword (at 40000018h), its PDE and first PTE. */
 #define ALIAS    0x00, 0x00, 0x00, 0x40                 /* PG_ALIAS_LIN, little-endian */
-#define RD_ALIAS 0xa1, 0x18, ALIAS                      /* mov eax, [40000018h] */
-#define WR_ALIAS 0x89, 0x0d, 0x18, ALIAS                /* mov [40000018h], ecx */
+#define RD_ALIAS 0xa1, 0x18, 0x00, 0x00, 0x40          /* mov eax, [40000018h] */
+#define WR_ALIAS 0x89, 0x0d, 0x18, 0x00, 0x00, 0x40    /* mov [40000018h], ecx */
 #define GET_PDE  0x8b, 0x35, 0x00, 0x04, 0x20, 0x00     /* mov esi, [PG_DIR + 400h] */
 #define GET_APTE 0x8b, 0x3d, 0x00, 0x10, 0x24, 0x00     /* mov edi, [PG_ALIAS] */
 #define CR0_PG (1u << 31)
