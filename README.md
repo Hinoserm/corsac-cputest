@@ -172,6 +172,7 @@ between versions until the group itself changes.
 | 273 | `ldt.gate` | a call gate and a DPL-3 code segment in the LDT, called from rings 3, 1 and 0 |
 | 274 | `task.call` | task switches by CALL to a TSS, a GDT task gate and an IDT task gate (from rings 0 and 3): the new task's registers, TR, NT and back link; IRET back, TR and busy bits after |
 | 275 | `task.jmp` | task switches by JMP to a TSS and a task gate and back: no nesting, no back link |
+| 276 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
