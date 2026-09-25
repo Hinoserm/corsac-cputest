@@ -686,3 +686,58 @@ group_sysops_ud(void)
     }
     ring_run("sysops.ud", seqs, n, 0, 0, 0);
 }
+
+/* ---- CMOV's memory read ------------------------------------------------------------------------------------------ */
+
+/* CMOVZ from memory through FS (the 64 KB segment, past its limit, or
+   null) or DS, with the condition true and false, 32- and 16-bit: the
+   P6 reads the operand whatever the condition, so a bad one faults even
+   when nothing moves. The false-condition faults are raw only. */
+static void
+group_cmov_fault(void)
+{
+    static const struct {
+        uint8_t len, b[7];
+    } segs[] = { { SEQ(0x66, 0xb8, 0x20, 0x00, 0x8e, 0xe0, 0x64) },
+                 { SEQ(0x66, 0xb8, 0x00, 0x00, 0x8e, 0xe0, 0x64) },
+                 { 0, { 0 } } };
+    const char    *name = "cmov.fault";
+    struct variant v    = { .group = name, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF,
+                            .fx = FX_CUSTOM, .defmask = dm_fxarg };
+    if (!(g_cpu.features & CPUID_CMOV)) {
+        group_skip(name, "no CMOV");
+        return;
+    }
+#ifdef HOSTTEST
+    group_skip(name, "segment loads (host build)");
+    return;
+#endif
+    group_begin(name);
+    for (int s = 0; s < 3; s++) {
+        for (int cond = 1; cond >= 0; cond--) {
+            for (int o16 = 0; o16 < 2; o16++) {
+                int      n = 0;
+                uint8_t *t = v.target;
+                t[n++]     = 0x31; /* xor ecx, ecx: ZF set */
+                t[n++]     = 0xc9;
+                if (!cond)
+                    t[n++] = 0x41; /* inc ecx: ZF clear */
+                if (s < 2) {
+                    memcpy(t + n, segs[s].b, segs[s].len - 1);
+                    n += segs[s].len - 1;
+                }
+                if (o16)
+                    t[n++] = 0x66;
+                if (s < 2)
+                    t[n++] = 0x64;
+                t[n++]       = 0x0f; /* cmovz eax, [ebx] */
+                t[n++]       = 0x44;
+                t[n++]       = 0x03;
+                v.target_len = n;
+                v.fx_arg     = cond || s == 2;
+                run_plain(&v, 1);
+            }
+        }
+    }
+    group_end(name);
+}
