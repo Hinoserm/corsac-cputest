@@ -166,6 +166,7 @@ between versions until the group itself changes.
 | 267 | `lmsw` | LMSW never clears PE and reaches only its four bits; SMSW to a register and to memory |
 | 268 | `cr23.rw` | CR2 and CR3 written and read back (CR3's low bits raw) |
 | 269 | `tsc.msr` | RDMSR of the TSC agrees with RDTSC |
+| 270 | `desc.accessed` | segment loads set a descriptor's accessed bit; LAR, LSL, VERR and VERW don't (the GDT read back, CPL 0 and 3) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -320,7 +321,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_ring.inc` | groups 211-241: rings 1-3 and V86 mode                   |
 | `groups_ring2.inc` | groups 242-254: limits, stacks, gates, 16-bit code in rings |
 | `groups_debug.inc` | groups 255-263: single-step and the debug registers      |
-| `groups_sys.inc` | groups 264 on: control registers                           |
+| `groups_sys.inc` | groups 264-269: control registers                        |
+| `groups_desc.inc` | groups 270 on: descriptors, the LDT, task switches        |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

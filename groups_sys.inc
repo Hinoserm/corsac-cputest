@@ -7,7 +7,7 @@
  * Included into groups.inc after groups_debug.inc; append only.
  */
 
-static uint32_t g_saved_cr0, g_saved_cr3, g_saved_cr4;
+static uint32_t g_saved_cr0 RING_UNUSED, g_saved_cr3 RING_UNUSED, g_saved_cr4 RING_UNUSED;
 
 static void
 sys_before(const struct variant *v)

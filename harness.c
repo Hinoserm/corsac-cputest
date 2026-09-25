@@ -780,7 +780,11 @@ extern uint8_t gdt[];
 #define SEL_RO3     0xe0 /* data, DPL 3, read-only */
 #define SEL_C16R2   0xe8 /* 16-bit code, DPL 2 */
 #define SEL_GATE13  0xf0 /* call gate, DPL 1, to ring 3 code (outward: #GP) */
-#define RING_GDT_N  31
+#define SEL_LDT     0xf8  /* the LDT (g_ldt) */
+#define SEL_TSS2    0x100 /* a second task (g_tss2) */
+#define SEL_TGATE   0x108 /* task gate, DPL 3, to SEL_TSS2 */
+#define SEL_TSS3    0x110 /* a TSS too short to switch to (#TS) */
+#define RING_GDT_N  35
 
 #define V86_BLOCK   0x8000u /* the V86 test's inputs, below 64 KB */
 #define V86_STACK   0x7f00u
@@ -799,6 +803,13 @@ static uint32_t g_idt2[64 * 2] __attribute__((aligned(8))) RING_UNUSED;
 #define TSS_IOMAP 136
 static uint8_t  g_tss[TSS_IOMAP + 8192 + 1] __attribute__((aligned(16))) RING_UNUSED;
 static uint8_t  g_rstack[4][1024] __attribute__((aligned(16))); /* rings 0 (faults) to 3 */
+/* The LDT: DPL-3 data (sel 07h at RPL 3), DPL-3 code (0Fh), DPL-0 data
+   (14h), a DPL-3 call gate to ring 0 (1Fh), a missing DPL-3 data segment
+   (27h), DPL-1 data (2Dh). */
+static uint32_t g_ldt[6 * 2] __attribute__((aligned(8))) RING_UNUSED;
+/* A second task, and the stack it runs on. */
+static uint8_t  g_tss2[104] __attribute__((aligned(16))) RING_UNUSED;
+static uint8_t  g_task_stack[1024] __attribute__((aligned(16))) RING_UNUSED;
 static int      g_tr_loaded RING_UNUSED;
 
 /* Where the call gates go: MOV ESI, CS (the CPL they run at, in its RPL)
@@ -857,6 +868,14 @@ seg_desc(int sel, uint32_t base, uint32_t limit, uint8_t access, uint8_t flags)
 }
 
 static void
+ldt_desc(int i, uint32_t base, uint32_t limit, uint8_t access, uint8_t flags)
+{
+    uint32_t *d = g_ldt + i * 2;
+    d[0]        = (limit & 0xffff) | (base << 16);
+    d[1]        = ((base >> 16) & 0xff) | ((uint32_t) access << 8) | (limit & 0xf0000) | ((uint32_t) flags << 20) | (base & 0xff000000);
+}
+
+static void
 gate_desc(uint32_t *d, uint16_t sel, uint32_t off, uint8_t type, uint8_t params)
 {
     d[0] = (off & 0xffff) | ((uint32_t) sel << 16);
@@ -902,6 +921,17 @@ ring_build(void)
     seg_desc(SEL_RO3, 0, 0xfffff, 0xf0, 0xc);
     seg_desc(SEL_C16R2, 0, 0xffff, 0xda, 0);
     gate_desc(g_gdt2 + (SEL_GATE13 >> 3) * 2, SEL_CODE3, (uint32_t) g_gate_ret, 0xac, 0);
+    seg_desc(SEL_LDT, (uint32_t) g_ldt, sizeof(g_ldt) - 1, 0x82, 0);
+    seg_desc(SEL_TSS2, (uint32_t) g_tss2, sizeof(g_tss2) - 1, 0x89, 0);
+    gate_desc(g_gdt2 + (SEL_TGATE >> 3) * 2, SEL_TSS2, 0, 0xe5, 0);
+    seg_desc(SEL_TSS3, (uint32_t) g_tss2, 0x60, 0x89, 0);
+    memset(g_ldt, 0, sizeof(g_ldt));
+    ldt_desc(0, 0, 0xfffff, 0xf2, 0xc);
+    ldt_desc(1, 0, 0xfffff, 0xfa, 0xc);
+    ldt_desc(2, 0, 0xfffff, 0x92, 0xc);
+    gate_desc(g_ldt + 3 * 2, 0x08, (uint32_t) g_gate_ret, 0xec, 0);
+    ldt_desc(4, 0, 0xfffff, 0x72, 0xc);
+    ldt_desc(5, 0, 0xfffff, 0xb2, 0xc);
 
     memset(g_idt2, 0, sizeof(g_idt2));
     for (int i = 0; i < 32; i++)
@@ -914,6 +944,7 @@ ring_build(void)
     gate_desc(g_idt2 + 0x35 * 2, SEL_CODE2, (uint32_t) g_ring_isr, 0xee, 0); /* into ring 2 */
     gate_desc(g_idt2 + 0x36 * 2, SEL_CODE3, (uint32_t) g_ring_isr, 0xee, 0); /* into ring 3 */
     gate_desc(g_idt2 + 0x37 * 2, SEL_CODE1, (uint32_t) g_ring_isr, 0xae, 0); /* into ring 1, DPL 1 */
+    gate_desc(g_idt2 + 0x38 * 2, SEL_TSS2, 0, 0xe5, 0);                     /* a task gate, DPL 3 */
 
     memset(g_tss, 0, sizeof(g_tss));
     *(uint32_t *) (g_tss + 4)   = (uint32_t) g_rstack[0] + sizeof(g_rstack[0]);
