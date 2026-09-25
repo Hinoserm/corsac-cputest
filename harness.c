@@ -349,6 +349,8 @@ e820_read(void)
 #endif
 }
 
+#include "mp.inc"
+
 #ifndef HOSTTEST
 static uint8_t
 cmos_read(uint8_t reg)
@@ -2156,6 +2158,8 @@ cmain(uint32_t rom_base)
     cpu_detect();
     putch('e');
     e820_read();
+    putch('m');
+    mp_read();
     putch('r');
     ram_detect();
     putch('a');
@@ -2191,6 +2195,12 @@ cmain(uint32_t rom_base)
         putdec(g_e820_mb_high);
         puts_("M");
     }
+    puts_(" mp=");
+    putdec(g_mp.status);
+    puts_("/");
+    putdec(g_mp.n_cpus);
+    puts_("/");
+    putdec(g_mp.n_ioapics);
     puts_(" cpu=");
     if (g_cpu.has_cpuid) {
         puts_(g_cpu.vendor);

@@ -451,6 +451,7 @@ group_bt(void)
 #include "groups_debug.inc"
 #include "groups_sys.inc"
 #include "groups_desc.inc"
+#include "groups_smp.inc"
 
 /* The groups in order. A group is a function, or one of a family of
    parametrised ones (the sampled loops) with its index. */
@@ -571,6 +572,7 @@ static const struct group_def groups[] = {
     G(group_task_jmp),
     G(group_task_errors),
     G(group_syscall),
+    G(group_mp_table),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
