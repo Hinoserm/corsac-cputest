@@ -75,7 +75,7 @@ goes into the group that already covers it, not into a group of its own.
 | 19 | `bound.arpl`  | BOUND inside, on and outside the bounds (#BR), ARPL             |
 | 20 | `misc`        | XLAT, CMC CLC STC CLD STD, WAIT, PAUSE, XCHG with memory; XLAT with ES:/CS: overrides, a null FS (#GP) and 16-bit addressing |
 | 21 | `mmx`         | every MMX instruction: arithmetic, packs, compares, shifts by register and immediate (with the #UD holes), MOVD/MOVQ; the Cyrix extended MMX instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
-| 22 | `mmx.x87`     | EMMS and the x87 tag and status words after MMX, EMMS and FLD   |
+| 22 | `mmx.x87`     | EMMS and the x87 tag and status words after MMX, EMMS and FLD; FXSAVE/FXRSTOR on the Pentium II Deschutes on: the whole 512-byte area (reserved bytes untouched), misaligned (#GP), a changed MM0 restored, 0F AE /0 register and /7 (#UD) |
 | 23 | `3dnow`       | 3DNow! and the K6-2+/K6-III+ extensions, FEMMS, PREFETCH(W)     |
 | 24 | `cmov`        | CMOVcc, all conditions, 16/32-bit, register and memory, after every producer (P6 on); CMOVZ from a bad FS operand with the condition false (the P6 reads it anyway) |
 | 25 | `rdtsc`       | two RDTSCs back to back: the difference is positive and small (Pentium on) |

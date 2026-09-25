@@ -8,6 +8,7 @@
  */
 
 #define CPUID_MMX     (1u << 23)
+#define CPUID_FXSR    (1u << 24)
 #define EXT_3DNOW     (1u << 31)
 #define EXT_3DNOWEXT  (1u << 30)
 
@@ -252,6 +253,67 @@ put_fenv(uint8_t *t, int n)
     return n + 4;
 }
 
+/* FXSAVE and FXRSTOR (Pentium II Deschutes on) with the MMX registers
+   loaded, into 512 bytes of the sandbox at 3000h (the sandbox CRC takes
+   all of it, reserved bytes included; the x87 instruction and operand
+   pointers at 8-23 are addresses, so they are cleared after): a save; a
+   misaligned one (#GP); a save, a changed ST0/MM0 and a restore (MM0 in
+   the MMX result); and 0F AE with a register operand and /7 (#UD). */
+static void
+fx_save(const char *name)
+{
+    uint32_t       a = (uint32_t) SANDBOX + 0x3000;
+    struct variant v = { .group = name, .mmx = 1, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg,
+                         .fx_arg = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+    if (!(g_cpu.features & CPUID_FXSR))
+        return;
+    for (int k = 0; k < 5; k++) {
+        uint8_t *t = v.target;
+        int      n = 0;
+        if (k < 3) {
+            t[n++] = 0x0f; /* fxsave [a] (misaligned by 8: k 1) */
+            t[n++] = 0xae;
+            t[n++] = 0x05;
+            put_le(t + n, k == 1 ? a + 8 : a, 4);
+            n += 4;
+            t[n++] = 0x31; /* xor eax, eax */
+            t[n++] = 0xc0;
+            for (int f = 8; f < 24; f += 4) {
+                t[n++] = 0xa3; /* mov [a+f], eax */
+                put_le(t + n, a + f, 4);
+                n += 4;
+            }
+        }
+        if (k == 2) {
+            t[n++] = 0xc7; /* mov dword [a+32], 12345678h: ST0's low mantissa */
+            t[n++] = 0x05;
+            put_le(t + n, a + 32, 4);
+            n += 4;
+            put_le(t + n, 0x12345678, 4);
+            n += 4;
+            t[n++] = 0x0f; /* fxrstor [a] */
+            t[n++] = 0xae;
+            t[n++] = 0x0d;
+            put_le(t + n, a, 4);
+            n += 4;
+        }
+        if (k == 3) {
+            t[n++] = 0x0f; /* 0F AE /0 with a register: #UD */
+            t[n++] = 0xae;
+            t[n++] = 0xc0;
+        }
+        if (k == 4) {
+            t[n++] = 0x0f; /* 0F AE /7 (CLFLUSH later): #UD */
+            t[n++] = 0xae;
+            t[n++] = 0x3d;
+            put_le(t + n, a, 4);
+            n += 4;
+        }
+        v.target_len = n;
+        run_plain(&v, 1);
+    }
+}
+
 static void
 group_mmx_x87(void)
 {
@@ -281,6 +343,7 @@ group_mmx_x87(void)
         v.arg2       = pre[i].tw_defined;
         run_plain(&v, 1);
     }
+    fx_save(name);
     group_end(name);
 }
 
