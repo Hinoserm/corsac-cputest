@@ -145,6 +145,28 @@ emit_smc(struct emit *e, const struct variant *v)
     g_smc_orig = *g_smc_patch;
 }
 
+/* Code in device memory: a routine written into off-screen VGA text
+   memory (BF000h), called, its immediate patched, called again (ESI and
+   EDI: both results). 86Box once fetched such code from a dummy. */
+static void
+smc_device(const char *name)
+{
+    static const uint8_t b[] = {
+        0xc7, 0x05, 0x00, 0xf0, 0x0b, 0x00, 0xb8, 0x78, 0x56, 0x34, /* mov dword [BF000h], 345678B8h */
+        0x66, 0xc7, 0x05, 0x04, 0xf0, 0x0b, 0x00, 0x12, 0xc3,       /* mov word [BF004h], C312h: mov eax, 12345678h; ret */
+        0xb8, 0x00, 0xf0, 0x0b, 0x00, 0xff, 0xd0, 0x89, 0xc6,       /* call it; mov esi, eax */
+        0xc7, 0x05, 0x01, 0xf0, 0x0b, 0x00, 0xf0, 0xde, 0xbc, 0x9a, /* the immediate: 9ABCDEF0h */
+        0xb8, 0x00, 0xf0, 0x0b, 0x00, 0xff, 0xd0, 0x89, 0xc7,       /* call again; mov edi, eax */
+    };
+    struct variant v = { .group = name };
+#ifdef HOSTTEST
+    return; /* no VGA memory in a Linux process */
+#endif
+    memcpy(v.target, b, sizeof(b));
+    v.target_len = sizeof(b);
+    run_plain(&v, 1);
+}
+
 static void
 group_smc(void)
 {
@@ -173,6 +195,7 @@ group_smc(void)
         v.canon      = k == 6 ? canon_smc_loop : kinds[k].defined ? 0 : canon_smc_byte;
         run_plain(&v, 2);
     }
+    smc_device(name);
     group_end(name);
 }
 
