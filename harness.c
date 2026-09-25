@@ -567,7 +567,7 @@ emit_epilogue(struct emit *e, int reset_flags)
 struct producer {
     const char   *name;
     uint8_t       len;
-    uint8_t       bytes[4];
+    uint8_t       bytes[6];
     uint16_t      undef; /* flags it leaves architecturally undefined */
 };
 
@@ -591,6 +591,16 @@ static const struct producer producers[] = {
     { "rol1", 2, { 0xd1, 0xc1 }, 0 },
     { "add8", 2, { 0x00, 0xd1 }, 0 },
     { "sub16", 3, { 0x66, 0x29, 0xd1 }, 0 },
+    { "imul", 3, { 0x0f, 0xaf, 0xca }, F_SF | F_ZF | F_AF | F_PF },
+    { "bt", 3, { 0x0f, 0xa3, 0xd1 }, F_OF | F_SF | F_AF | F_PF },
+    { "xadd", 3, { 0x0f, 0xc1, 0xd1 }, 0 },
+    { "subshl0", 5, { 0x29, 0xd1, 0xc1, 0xe2, 0x00 }, 0 }, /* a shift by 0 leaves SUB's flags */
+    { "rcl1", 2, { 0xd1, 0xd1 }, 0 },
+    { "neg8", 2, { 0xf6, 0xd9 }, 0 },
+    { "inc8", 2, { 0xfe, 0xc1 }, 0 },
+    { "dec16", 2, { 0x66, 0x49 }, 0 },
+    { "clc", 1, { 0xf8 }, 0 },
+    { "cmc", 1, { 0xf5 }, 0 },
 };
 #define N_PRODUCERS (sizeof(producers) / sizeof(producers[0]))
 
