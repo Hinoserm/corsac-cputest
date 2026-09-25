@@ -143,6 +143,7 @@ between versions until the group itself changes.
 | 244 | `r1.limits` | the same at CPL 1 |
 | 245 | `r3.ss` | SS on those descriptors at CPL 3, a push and pop either side of the limit: #SS, #GP, expand-down and 16-bit stacks |
 | 246 | `r1.ss` | the same at CPL 1 |
+| 247 | `conforming` | far calls to conforming code of DPL 0, 1 and 3 from rings 1-3: runs at the caller's CPL, or #GP |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
