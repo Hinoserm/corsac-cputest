@@ -459,7 +459,13 @@ ring_pf_run(const char *name, const struct ring_seq *seqs, unsigned n, uint32_t 
     { r, 0, 0, 64, RF_MEM, 1, SEQ(0x8b, 0x43, 0x16) },       /* a dword across both */ \
     { r, 0, 0, 4, RF_MEM, 1, SEQ(0x89, 0x4b, 0x18) },        /* write a read-only page */ \
     { r, 0, 0, 4, RF_MEM, 1, SEQ(0x8b, 0x43, 0x18) },        /* read it */         \
-    { r, 0, 0, 1, RF_MEM, 1, SEQ(0x8b, 0x43, 0x18) },        /* a missing page */
+    { r, 0, 0, 1, RF_MEM, 1, SEQ(0x8b, 0x43, 0x18) },        /* a missing page */ \
+    { r, 0, 0, 128, RF_SANDBOX, 1, SEQ(RD_ALIAS) },          /* the alias page */ \
+    { r, 0, 0, 128, RF_SANDBOX, 1, SEQ(WR_ALIAS) },                               \
+    { r, 0, 0, 128 | 1024, RF_SANDBOX, 1, SEQ(RD_ALIAS) },   /* its PDE supervisor-only */ \
+    { r, 0, 0, 128 | 2048, RF_SANDBOX, 1, SEQ(RD_ALIAS) },   /* its PTE supervisor-only */ \
+    { r, 0, 0, 128 | 256, RF_SANDBOX, 1, SEQ(WR_ALIAS) },    /* its PDE read-only */ \
+    { r, 0, 0, 128 | 512, RF_SANDBOX, 1, SEQ(RD_ALIAS) },    /* its PDE missing */
 
 static void
 group_r3_pf(void)

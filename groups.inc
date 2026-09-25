@@ -75,7 +75,6 @@ dm_fxarg(const struct variant *v, const struct kin *in, struct kout *d, uint16_t
 #define CPUID_PGE   (1u << 13)
 #define EF_VIF      0x80000u
 #define EF_VIP      0x100000u
-#define ALIAS       0x00, 0x00, 0x00, 0x40 /* PG_ALIAS_LIN, little-endian */
 
 #ifndef HOSTTEST
 static __attribute__((unused)) void
@@ -571,10 +570,6 @@ static const struct group_def groups[] = {
     G(group_task_jmp),
     G(group_task_errors),
     G(group_syscall),
-    G(group_pg_rmw),
-    G(group_pg_pde),
-    G(group_pg_global),
-    G(group_r3_pde),
     G(group_cyrix_emmi),
     G(group_sysops_ud),
 };

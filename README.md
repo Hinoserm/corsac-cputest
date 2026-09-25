@@ -98,12 +98,12 @@ goes into the group that already covers it, not into a group of its own.
 | 198 | `tsc.write` | WRMSR to the TSC with the upper half set, read back: which models write all 64 bits |
 | 199 | `cyrix.dir` | the Cyrix DIR0/DIR1 and CCR0-3 through ports 22h/23h, only on a CPU the 5/2 test or CPUID calls a Cyrix |
 | 200 | `pg.basic`    | with paging on (identity map, 4 KB pages): loads, stores, RMW, XADD/XCHG and PUSH/POP to memory, misaligned across a page boundary |
-| 201 | `pg.notpresent` | #PF from a missing page: loads, stores, RMW, LOCK, PUSH/POP to memory; error code and CR2 (RMW forms raw only) |
-| 202 | `pg.readonly.wp0` | a read-only page with CR0.WP clear: supervisor writes go through |
+| 201 | `pg.notpresent` | #PF from a missing page: loads, stores, RMW, LOCK, PUSH/POP to memory; error code and CR2 (RMW forms raw only); the alias page through a missing PDE, and through a present PDE and missing PTE |
+| 202 | `pg.readonly.wp0` | a read-only page with CR0.WP clear: supervisor writes go through; CMPXCHG (equal and not), CMPXCHG8B, XADD, locked BTS/ADD and BT; the alias page through a read-only PDE |
 | 203 | `pg.readonly.wp1` | the same with CR0.WP set: supervisor writes fault (486 on) |
 | 204 | `pg.cross` | accesses split across a present and a missing page: which half faults, CR2, nothing written (raw) |
-| 205 | `pg.ad` | the accessed and dirty bits in the PTE after a read, a write, RMW, and a write after a read |
-| 206 | `pg.tlb` | a PTE changed under a cached translation: stale read (raw), then INVLPG or a CR3 reload |
+| 205 | `pg.ad` | the accessed and dirty bits in the PTE after a read, a write, RMW, and a write after a read; after CMPXCHG equal and not (a failed compare still writes), CMPXCHG8B and BT; the alias page's PDE and PTE after a read and a write |
+| 206 | `pg.tlb` | a PTE changed under a cached translation: stale read (raw), then INVLPG or a CR3 reload; CR4.PGE: a global page survives a CR3 reload and INVLPG removes it; without G or PGE it doesn't |
 | 207 | `pg.pse` | a 4 MB page (CR4.PSE) aliasing low memory: reads, writes and the PDE's accessed/dirty bits |
 | 208 | `pg.string` | REP MOVS/STOS/LODS running into a missing page part-way, both directions: registers at the fault and the memory done |
 | 209 | `pg.exec` | a jump and a call into a missing page: #PF on the fetch |
@@ -117,7 +117,7 @@ goes into the group that already covers it, not into a group of its own.
 | 217 | `r3.gates` | call gates of every DPL (and into ring 1), parameter copying, conforming code, direct and JMP transfers that must #GP |
 | 218 | `r3.int` | INT through gates of DPL 0 and 1 (#GP), INT3 and INT 3 (#GP), ICEBP (no DPL check), INTO |
 | 219 | `r3.tsd` | CR4.TSD: RDTSC faults outside ring 0, whatever IOPL; RDPMC without CR4.PCE; RDPMC of counters 0-2 at CPL 0-3 with and without CR4.PCE (Pentium MMX, P6) |
-| 220 | `r3.pf` | paging at CPL 3: supervisor pages, read-only pages, missing pages; U/S in the error code |
+| 220 | `r3.pf` | paging at CPL 3: supervisor pages, read-only pages, missing pages; U/S in the error code; the alias page with its PDE or PTE supervisor-only, the PDE read-only or missing |
 | 221 | `r1.basic` | code at CPL 1 (CORSAC's sub-kernels): the same as r3.basic |
 | 222 | `r1.priv` | every privileged instruction at CPL 1: #GP(0) |
 | 223 | `r1.iopl1` | ring 1 with IOPL 1, as CORSAC runs it: ports past the bitmap, CLI, POPF; still no privileged instructions |
@@ -175,12 +175,8 @@ goes into the group that already covers it, not into a group of its own.
 | 275 | `task.jmp` | task switches by JMP to a TSS and a task gate and back: no nesting, no back link |
 | 276 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
 | 277 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
-| 278 | `pg.rmw` | CMPXCHG, CMPXCHG8B, XADD and locked BTS/ADD on a read-only page (WP), compare equal and not; the dirty bit after a failed compare |
-| 279 | `pg.pde` | the alias page through a read-only or not-present PDE (WP): reads, writes, CR2, and the PDE's and PTE's A and D bits |
-| 280 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
-| 281 | `r3.pde` | the alias page from rings 1-3 with the PDE or PTE supervisor-only, the PDE read-only or not present |
-| 282 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
-| 283 | `sysops.ud` | SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 0 and 3 with nothing set up |
+| 278 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
+| 279 | `sysops.ud` | SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 0 and 3 with nothing set up |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

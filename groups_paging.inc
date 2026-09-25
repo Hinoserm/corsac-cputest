@@ -18,6 +18,12 @@
 #define PTE_A  0x020u
 #define PTE_D  0x040u
 #define PDE_PS 0x080u
+/* The alias page's first dword (at 40000018h), its PDE and first PTE. */
+#define ALIAS    0x00, 0x00, 0x00, 0x40                 /* PG_ALIAS_LIN, little-endian */
+#define RD_ALIAS 0xa1, 0x18, ALIAS                      /* mov eax, [40000018h] */
+#define WR_ALIAS 0x89, 0x0d, 0x18, ALIAS                /* mov [40000018h], ecx */
+#define GET_PDE  0x8b, 0x35, 0x00, 0x04, 0x20, 0x00     /* mov esi, [PG_DIR + 400h] */
+#define GET_APTE 0x8b, 0x3d, 0x00, 0x10, 0x24, 0x00     /* mov edi, [PG_ALIAS] */
 #define CR0_PG (1u << 31)
 #define CR0_WP (1u << 16)
 #define CR4_PSE (1u << 4)
@@ -250,6 +256,9 @@ group_pg_notpresent(void)
         { 1, 1, SEQ(0x8f, 0x43, 0x18) },             /* pop dword [ebx+24] */
         { 1, 1, SEQ(0x8b, 0x43, 0x10) },             /* mov eax, [ebx+16]: the present page */
         { 1, 1, SEQ(0x0f, 0xb6, 0x43, 0x18) },       /* movzx eax, byte [ebx+24] */
+        { 128, 1, SEQ(RD_ALIAS), 512 },              /* the alias page through a missing PDE */
+        { 128, 1, SEQ(WR_ALIAS), 512 },
+        { 0, 1, SEQ(RD_ALIAS) },                     /* the PDE there, the PTE not */
     };
     pg_run_seqs("pg.notpresent", seqs, sizeof(seqs) / sizeof(seqs[0]), 0);
 }
@@ -264,6 +273,21 @@ static const struct pg_seq pg_ro_seqs[] = {
     { 4, 1, SEQ(0x0f, 0xb1, 0x4b, 0x18) }, /* cmpxchg [ebx+24], ecx */
     { 4, 1, SEQ(0x89, 0x4b, 0x16) },       /* mov [ebx+22], ecx: half on each page */
     { 4, 1, SEQ(0x88, 0x4b, 0x17) },       /* mov [ebx+23], cl: the writable page */
+    /* Read-modify-write: CMPXCHG and CMPXCHG8B write whether the compare
+       succeeds or not (a failed one writes the old value back), so both
+       fault with WP; the failed compares are raw only. */
+    { 4, 1, SEQ(0x8b, 0x43, 0x18, 0x0f, 0xb1, 0x4b, 0x18) },                   /* cmpxchg, equal */
+    { 4, 0, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xb1, 0x4b, 0x18) },       /* cmpxchg, not */
+    { 4, 0, SEQ(0x8a, 0x43, 0x18, 0xf6, 0xd0, 0x0f, 0xb0, 0x4b, 0x18) },       /* byte, not */
+    { 4, 1, SEQ(0x8b, 0x43, 0x18, 0x8b, 0x53, 0x1c, 0x0f, 0xc7, 0x4b, 0x18) }, /* cmpxchg8b, equal */
+    { 4, 0, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xc7, 0x4b, 0x18) },       /* cmpxchg8b, not */
+    { 4, 1, SEQ(0x0f, 0xc1, 0x43, 0x18) },                                     /* xadd */
+    { 4, 1, SEQ(0xf0, 0x0f, 0xba, 0x6b, 0x18, 0x05) },                         /* lock bts */
+    { 4, 1, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },                               /* bt: a read */
+    { 4, 1, SEQ(0xf0, 0x83, 0x43, 0x18, 0x00) },                               /* lock add 0 */
+    /* The alias page through a read-only PDE: the stricter level counts. */
+    { 128, 1, SEQ(RD_ALIAS, GET_PDE), 256 },
+    { 128, 1, SEQ(WR_ALIAS), 256 },
 };
 
 static void
@@ -299,32 +323,44 @@ group_pg_cross(void)
     pg_run_seqs("pg.cross", seqs, sizeof(seqs) / sizeof(seqs[0]), 0);
 }
 
-/* The accessed and dirty bits: the tests read the second page's PTE (and
-   the first page directory entry) back after touching the page. */
+/* The accessed and dirty bits: the tests read the second page's PTE back
+   after touching the page, or the alias page's PDE and PTE (A in both, D
+   only in the PTE). A failed CMPXCHG still writes, so it sets D: raw
+   only, like everything about failed compares. */
 static void
 group_pg_ad(void)
 {
-    static struct pg_seq seqs[5];
-    uint32_t             pte = (uint32_t) pte_of((uint32_t) SANDBOX + 0x2000);
-    static const uint8_t acc[5][7] = {
-        { 3, 0x8b, 0x43, 0x18 },                   /* mov eax, [ebx+24] */
-        { 3, 0x89, 0x4b, 0x18 },                   /* mov [ebx+24], ecx */
-        { 3, 0x01, 0x53, 0x18 },                   /* add [ebx+24], edx */
-        { 6, 0x8b, 0x43, 0x18, 0x89, 0x4b, 0x18 }, /* read, then write: D once the TLB has it */
-        { 3, 0x85, 0x43, 0x18 },                   /* test [ebx+24], eax: a read that writes nothing */
+    static const struct {
+        uint8_t setup, defined, pte, len, b[19];
+    } t[] = {
+        { 0, 1, 1, SEQ(0x8b, 0x43, 0x18) },                               /* mov eax, [ebx+24] */
+        { 0, 1, 1, SEQ(0x89, 0x4b, 0x18) },                               /* mov [ebx+24], ecx */
+        { 0, 1, 1, SEQ(0x01, 0x53, 0x18) },                               /* add [ebx+24], edx */
+        { 0, 1, 1, SEQ(0x8b, 0x43, 0x18, 0x89, 0x4b, 0x18) },             /* read, then write: D once the TLB has it */
+        { 0, 1, 1, SEQ(0x85, 0x43, 0x18) },                               /* test [ebx+24], eax: a read that writes nothing */
+        { 0, 1, 1, SEQ(0x8b, 0x43, 0x18, 0x0f, 0xb1, 0x4b, 0x18) },       /* cmpxchg, equal */
+        { 0, 0, 1, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xb1, 0x4b, 0x18) }, /* cmpxchg, not */
+        { 0, 0, 1, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xc7, 0x4b, 0x18) }, /* cmpxchg8b, not */
+        { 0, 1, 1, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },                   /* bt: A only */
+        { 128, 1, 0, SEQ(RD_ALIAS, GET_PDE, GET_APTE) },
+        { 128, 1, 0, SEQ(WR_ALIAS, GET_PDE, GET_APTE) },
     };
-    for (int i = 0; i < 5; i++) {
-        int n = acc[i][0];
-        memcpy(seqs[i].b, acc[i] + 1, n);
-        seqs[i].b[n++] = 0x8b; /* mov esi, [pte] */
-        seqs[i].b[n++] = 0x35;
-        put_le(seqs[i].b + n, pte, 4);
-        n += 4;
+    static struct pg_seq seqs[sizeof(t) / sizeof(t[0])];
+    uint32_t             pte = (uint32_t) pte_of((uint32_t) SANDBOX + 0x2000);
+    for (unsigned i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        int n = t[i].len;
+        memcpy(seqs[i].b, t[i].b, n);
+        if (t[i].pte) {
+            seqs[i].b[n++] = 0x8b; /* mov esi, [pte] */
+            seqs[i].b[n++] = 0x35;
+            put_le(seqs[i].b + n, pte, 4);
+            n += 4;
+        }
         seqs[i].len     = n;
-        seqs[i].setup   = 0;
-        seqs[i].defined = 1;
+        seqs[i].setup   = t[i].setup;
+        seqs[i].defined = t[i].defined;
     }
-    pg_run_seqs("pg.ad", seqs, 5, 0);
+    pg_run_seqs("pg.ad", seqs, sizeof(seqs) / sizeof(seqs[0]), 0);
 }
 
 /* The TLB: read the second page, point its PTE at the next physical page,
@@ -336,6 +372,69 @@ dm_tlb(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *
 {
     d->ecx = 0;
     return 1;
+}
+
+/* Global pages: the alias page read, its PTE pointed at the next page, CR3 reloaded,
+   read again (ECX: a global entry survives the reload, with CR4.PGE; raw
+   only), then INVLPG and a third read (ESI: the new page). Variants: PGE
+   and G, PGE without G, G without PGE (arg2 bit 0: PGE). PGE is toggled
+   off and on before each run, which flushes the global entries too. */
+static void
+pgg_before(const struct variant *v)
+{
+#ifndef HOSTTEST
+    cr4_set(CR4_PGE, 0);
+    pg_setup(v);
+    if (v->arg2)
+        cr4_set(CR4_PGE, 1);
+#endif
+}
+
+static void
+pgg_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    cr4_set(CR4_PGE, 0);
+    pg_reset(v);
+#endif
+}
+
+static void
+tlb_global(const char *name)
+{
+    static const struct {
+        uint8_t pge, g;
+    } cases[] = { { 1, 1 }, { 1, 0 }, { 0, 1 } };
+    struct variant v = { .group = name, .paging = 1, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF,
+                         .fx = FX_CUSTOM, .defmask = dm_tlb, .before_run = pgg_before, .after_run = pgg_after };
+    if (!(g_cpu.features & CPUID_PGE))
+        return;
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint8_t *t = v.target;
+        int      n = 0;
+        static const uint8_t rd[] = { 0xa1, ALIAS };
+        memcpy(t + n, rd, sizeof(rd));
+        n += sizeof(rd);
+        t[n++] = 0xc7; /* mov dword [alias PTE], the next page */
+        t[n++] = 0x05;
+        put_le(t + n, PG_ALIAS, 4);
+        n += 4;
+        put_le(t + n, ((uint32_t) SANDBOX + 0x3000) | PTE_P | PTE_W | (cases[i].g ? 0x100 : 0), 4);
+        n += 4;
+        static const uint8_t rest[] = {
+            0x0f, 0x20, 0xda,             /* mov edx, cr3 */
+            0x0f, 0x22, 0xda,             /* mov cr3, edx */
+            0x8b, 0x0d, ALIAS,            /* mov ecx, [alias] */
+            0x0f, 0x01, 0x3d, ALIAS,      /* invlpg [alias] */
+            0x8b, 0x35, ALIAS,            /* mov esi, [alias] */
+        };
+        memcpy(t + n, rest, sizeof(rest));
+        n += sizeof(rest);
+        v.target_len = n;
+        v.arg2       = cases[i].pge;
+        v.arg3       = 128 | (cases[i].g ? 4096 : 0);
+        run_plain(&v, 1);
+    }
 }
 
 static void
@@ -386,6 +485,7 @@ group_pg_tlb(void)
         v.arg3       = 0;
         run_plain(&v, 1);
     }
+    tlb_global(name);
     pg_end(name);
 }
 
