@@ -34,6 +34,14 @@ static const struct loop_def {
     { "loop.sub32", LK_BIN, 32, 0x8d5, SEQ(0x29, 0xd8) },
     { "loop.xor32", LK_BIN, 32, 0x8c5, SEQ(0x31, 0xd8) },
     { "loop.cmp32", LK_BIN, 32, 0x8d5, SEQ(0x39, 0xd8) },
+    { "loop.inc16", LK_UN, 16, 0x8d5, SEQ(0x66, 0xff, 0xc0) },
+    { "loop.dec16", LK_UN, 16, 0x8d5, SEQ(0x66, 0xff, 0xc8) },
+    { "loop.neg16", LK_UN, 16, 0x8d5, SEQ(0x66, 0xf7, 0xd8) },
+    { "loop.not16", LK_UN, 16, 0x0c5, SEQ(0x66, 0xf7, 0xd0) },
+    { "loop.inc32", LK_UN, 32, 0x8d5, SEQ(0xff, 0xc0) },
+    { "loop.dec32", LK_UN, 32, 0x8d5, SEQ(0xff, 0xc8) },
+    { "loop.neg32", LK_UN, 32, 0x8d5, SEQ(0xf7, 0xd8) },
+    { "loop.not32", LK_UN, 32, 0x0c5, SEQ(0xf7, 0xd0) },
 };
 
 #define LOOP_N 4096
@@ -199,4 +207,5 @@ group_loop(unsigned i)
 #define LOOP_GROUPS \
 GA(group_loop, 0), GA(group_loop, 1), GA(group_loop, 2), GA(group_loop, 3), GA(group_loop, 4), GA(group_loop, 5), \
 GA(group_loop, 6), GA(group_loop, 7), GA(group_loop, 8), GA(group_loop, 9), GA(group_loop, 10), GA(group_loop, 11), \
-GA(group_loop, 12), GA(group_loop, 13), GA(group_loop, 14), GA(group_loop, 15),
+GA(group_loop, 12), GA(group_loop, 13), GA(group_loop, 14), GA(group_loop, 15), GA(group_loop, 16), GA(group_loop, 17), \
+GA(group_loop, 18), GA(group_loop, 19), GA(group_loop, 20), GA(group_loop, 21), GA(group_loop, 22), GA(group_loop, 23),
