@@ -170,6 +170,7 @@ between versions until the group itself changes.
 | 271 | `ldt.load` | LLDT of the LDT, null, a TSS, data, a TI=1 selector, from memory; SLDT; TI=1 loads with no LDT (#GP) |
 | 272 | `ldt.seg` | LAR/LSL, FS and SS loads through LDT selectors at CPL 0, 1 and 3: DPL, not present, past the LDT's limit |
 | 273 | `ldt.gate` | a call gate and a DPL-3 code segment in the LDT, called from rings 3, 1 and 0 |
+| 274 | `task.call` | task switches by CALL to a TSS, a GDT task gate and an IDT task gate (from rings 0 and 3): the new task's registers, TR, NT and back link; IRET back, TR and busy bits after |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
