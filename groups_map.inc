@@ -9,7 +9,8 @@
    - INVD (loses the cache's dirty lines) and LOADALL/SYSRET (07);
    - MOV to a control, debug or test register, and WRMSR;
    - RDTSC, RDMSR and RDPMC, whose results change between runs;
-   - the near Jcc forms, which would jump into the trailer;
+   - the near Jcc forms, which would jump into the trailer (row 8 runs
+     them over a MOV instead);
    - PUSH/POP FS/GS, which unbalance the stack the test returns on;
    - 0F 38, SMINT on a Cyrix 6x86: into SMM if the BIOS enabled SMIs.
    And in the memory form only: the bit-string instructions with a
@@ -39,6 +40,16 @@ group_opmap(unsigned row)
     const char    *name = names[row];
     struct variant v    = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_arg3, .arg = MEM_OFF };
     group_begin(name);
+    if (row == 8) { /* the near Jcc: over MOV AL, 1, so the jump lands on real code */
+        for (int lo = 0; lo < 16; lo++) {
+            static const uint8_t jcc[8] = { 0x0f, 0x80, 0x02, 0x00, 0x00, 0x00, 0xb0, 0x01 };
+            memcpy(v.target, jcc, sizeof(jcc));
+            v.target[1] |= lo;
+            v.target_len = sizeof(jcc);
+            v.fix_input  = 0;
+            run_plain(&v, 1);
+        }
+    }
     for (int lo = 0; lo < 16; lo++) {
         int op = (row << 4) | lo;
         for (int mem = 0; mem < 2; mem++) {
