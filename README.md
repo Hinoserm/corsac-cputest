@@ -180,6 +180,7 @@ between versions until the group itself changes.
 | 281 | `string.overlap` | REP MOVSB/W/D over overlapping source and destination, both directions, and a count of 0 |
 | 282 | `string.long` | long REP STOS, MOVS, CMPS and SCAS across the sandbox's pages, unaligned and backwards |
 | 283 | `sreg.upper` | MOV r32/r16/m16, Sreg for every segment register, and PUSH Sreg with a 32-bit operand: how much of the slot is written |
+| 284 | `lar.systypes` | LAR, LSL and VERR of each of the 16 system descriptor types |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

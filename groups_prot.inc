@@ -397,3 +397,35 @@ group_sreg_upper(void)
     }
     group_end(name);
 }
+
+/* ---- every descriptor type --------------------------------------------------------------- */
+
+#define SCRATCH_RAW(access, flags) (0x900 | ((uint32_t) (access) << 12) | ((uint32_t) (flags) << 20))
+
+/* LAR, LSL and VERR of the scratch descriptor as each of the 16 system
+   types (S = 0): which ones LAR and LSL accept. Raw (LAR's undefined
+   bits). */
+static void
+group_lar_systypes(void)
+{
+    static const uint8_t code[] = {
+        0x66, 0xb9, SEL_SCRATCH, 0x00, /* mov cx, sel */
+        0x0f, 0x02, 0xc1,              /* lar eax, ecx */
+        0x0f, 0x94, 0xc3,              /* setz bl */
+        0x0f, 0x03, 0xd1,              /* lsl edx, ecx */
+        0x0f, 0x94, 0xc7,              /* setz bh */
+        0x0f, 0x00, 0xe1,              /* verr cx */
+        0x0f, 0x94, 0xc5,              /* setz ch */
+    };
+    struct variant v = { .group = "lar.systypes", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                         .fix_input = fix_ring, .arg2 = RF_NONE, .fx = FX_CUSTOM, .defmask = dm_fxarg };
+    if (!ring_begin(v.group, 0, 0))
+        return;
+    memcpy(v.target, code, sizeof(code));
+    v.target_len = sizeof(code);
+    for (int t = 0; t < 16; t++) {
+        v.arg = SCRATCH_RAW(0x80 | t, 0x4);
+        run_plain(&v, 1);
+    }
+    ring_end(v.group, 0, 0);
+}
