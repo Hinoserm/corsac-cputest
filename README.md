@@ -116,7 +116,7 @@ goes into the group that already covers it, not into a group of its own.
 | 216 | `r3.seg` | segment loads at CPL 3 (DPL and RPL rules, SS, system descriptors, null) and LAR/VERR/VERW |
 | 217 | `r3.gates` | call gates of every DPL (and into ring 1), parameter copying, conforming code, direct and JMP transfers that must #GP |
 | 218 | `r3.int` | INT through gates of DPL 0 and 1 (#GP), INT3 and INT 3 (#GP), ICEBP (no DPL check), INTO |
-| 219 | `r3.tsd` | CR4.TSD: RDTSC faults outside ring 0, whatever IOPL; RDPMC without CR4.PCE; RDPMC of counters 0-2 at CPL 0-3 with and without CR4.PCE (Pentium MMX, P6) |
+| 219 | `r3.tsd` | CR4.TSD: RDTSC faults outside ring 0, whatever IOPL; RDPMC without CR4.PCE; RDPMC of counters 0-2 at CPL 0-3 with and without CR4.PCE (Pentium MMX, P6); counter 0 counting instructions (P6 EvtSel0, Pentium MMX CESR) at CPL 0 and 3: RDPMC must move |
 | 220 | `r3.pf` | paging at CPL 3: supervisor pages, read-only pages, missing pages; U/S in the error code; the alias page with its PDE or PTE supervisor-only, the PDE read-only or missing |
 | 221 | `r1.basic` | code at CPL 1 (CORSAC's sub-kernels): the same as r3.basic |
 | 222 | `r1.priv` | every privileged instruction at CPL 1: #GP(0) |

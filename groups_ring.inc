@@ -356,15 +356,28 @@ group_r3_int(void)
 }
 
 /* RDPMC of counters 0, 1 and 2 (#GP: there are two) at CPL 0, and outside
-   it with CR4.PCE (setup 100000h) and without. The counts are cleared
-   straight after: only whether it faults counts. Intel with MMX, and the
-   Pentium Pro. */
+   it with CR4.PCE (setup 100000h) and without; the value is cleared
+   straight after, only whether it faults counts. Then counter 0 counting
+   instructions (setup 400000h: on a P6 EvtSel0 = C0h, instructions
+   retired, OS and USR; on a Pentium MMX CESR = 16h, instructions
+   executed, at every CPL): read, an ADD, read again, and EAX = 1 if the
+   difference is between 1 and 127. The counters are stopped and
+   cleared after each run. Intel with MMX, and the Pentium Pro. */
 static void
 pce_before(const struct variant *v)
 {
     ring_setup(v);
 #ifndef HOSTTEST
     cr4_set(CR4_PCE, v->arg3 & 0x100000);
+    if (v->arg3 & 0x400000) {
+        if (((g_cpu.signature >> 8) & 0xf) == 6) {
+            wrmsr_(0xc1, 0, 0);
+            wrmsr_(0x186, 0x004300c0, 0); /* EN, OS, USR, instructions retired */
+        } else {
+            wrmsr_(0x12, 0, 0);
+            wrmsr_(0x11, 0xd6, 0); /* CC0 every CPL, ES0 instructions executed */
+        }
+    }
 #endif
 }
 
@@ -373,10 +386,26 @@ pce_after(const struct variant *v)
 {
 #ifndef HOSTTEST
     cr4_set(CR4_PCE, 0);
+    if (v->arg3 & 0x400000) {
+        if (((g_cpu.signature >> 8) & 0xf) == 6) {
+            wrmsr_(0x186, 0, 0);
+            wrmsr_(0xc1, 0, 0);
+        } else {
+            wrmsr_(0x11, 0, 0);
+            wrmsr_(0x12, 0, 0);
+        }
+    }
 #endif
 }
 
 #define PMC(r, c, pce) { r, 0, 1, SEQ(0xb9, c, 0, 0, 0, 0x0f, 0x33, 0x31, 0xc0, 0x31, 0xd2), 0, (pce) ? 0x100000 : 0 }
+#define PMC_COUNT(r)                                                                  \
+    { r, 0, 1,                                                                        \
+      SEQ(0x31, 0xc9, 0x0f, 0x33, 0x89, 0xc6,       /* rdpmc 0; mov esi, eax */       \
+          0x01, 0xd7, 0x0f, 0x33, 0x29, 0xf0,       /* add edi, edx; rdpmc; sub eax, esi */ \
+          0x48, 0x83, 0xf8, 0x7f, 0x0f, 0x92, 0xc0, /* dec eax; cmp eax, 7Fh; setb al */ \
+          0x83, 0xe0, 0x01, 0x31, 0xf6),            /* and eax, 1; xor esi, esi */    \
+      0, 0x500000 }
 
 static void
 tsd_rdpmc(const char *name)
@@ -384,6 +413,7 @@ tsd_rdpmc(const char *name)
     static const struct rx_seq seqs[] = {
         PMC(0, 0, 0), PMC(0, 1, 0), PMC(0, 2, 0), PMC(3, 0, 1),
         PMC(3, 1, 1), PMC(3, 2, 1), PMC(1, 0, 0), PMC(1, 0, 1), PMC(2, 1, 1),
+        PMC_COUNT(0), PMC_COUNT(3),
     };
     struct variant v      = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = pce_before,
                               .after_run = pce_after, .fx = FX_CUSTOM, .defmask = dm_fxarg };
