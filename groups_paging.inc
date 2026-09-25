@@ -395,6 +395,8 @@ static const struct pg_seq pg_ro_seqs[] = {
     { 4, 1, SEQ(0xf0, 0x0f, 0xba, 0x6b, 0x18, 0x05) },                         /* lock bts */
     { 4, 1, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },                               /* bt: a read */
     { 4, 1, SEQ(0xf0, 0x83, 0x43, 0x18, 0x00) },                               /* lock add 0 */
+    { 4, 1, SEQ(0x8b, 0x43, 0x14, 0x8b, 0x53, 0x18, 0x0f, 0xc7, 0x4b, 0x14) }, /* cmpxchg8b equal, its high dword on the
+                                                                                  read-only page: nothing written */
     /* The alias page through a read-only PDE: the stricter level counts. */
     { 128, 1, SEQ(RD_ALIAS, GET_PDE), 256 },
     { 128, 1, SEQ(WR_ALIAS), 256 },
