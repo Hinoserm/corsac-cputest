@@ -277,3 +277,41 @@ group_stack16(void)
     }
     group_end(name);
 }
+
+/* ---- string copies that overlap, and long ones --------------------------------------- */
+
+/* The cases (edge order): MOVSB onto itself one byte on (a byte repeated
+   down the buffer), one byte back, DF set; MOVSW and MOVSD overlapping
+   by one or two bytes; a count of 0. */
+static void
+fix_overlap(const struct variant *v)
+{
+    static const struct {
+        int8_t  delta;
+        uint8_t count, df;
+    } cases[] = { { 1, 16, 0 }, { -1, 16, 0 }, { 1, 16, 1 }, { -1, 16, 1 }, { 2, 8, 0 }, { 3, 8, 0 }, { 1, 0, 0 } };
+    int e = edge(7);
+    if (e < 0)
+        e = rnd() % 7;
+    g_in.flags = (g_in.flags & ~0x400u) | (cases[e].df ? 0x400 : 0);
+    g_in.esi   = (uint32_t) g_buf + 24;
+    g_in.edi   = g_in.esi + cases[e].delta;
+    g_in.ecx   = cases[e].count;
+}
+
+static void
+group_string_overlap(void)
+{
+    static const struct {
+        uint8_t len, b[3];
+    } seqs[] = { { SEQ(0xf3, 0xa4) }, { SEQ(0xf3, 0xa5) }, { SEQ(0xf3, 0x66, 0xa5) } };
+    const char    *name = "string.overlap";
+    struct variant v    = { .group = name, .fix_input = fix_overlap, .norm = (1 << R_ESI) | (1 << R_EDI) };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        run_keep(&v, 8);
+    }
+    group_end(name);
+}
