@@ -199,3 +199,93 @@ group_alu_mem(void)
     }
     group_end(name);
 }
+
+/* ---- INC DEC NEG NOT TEST ------------------------------------------------- */
+
+/* fx_arg: 0 INC/DEC (every flag but CF, which passes through), 1 NEG (all),
+   2 NOT (none), 3 TEST (all but AF). */
+static int
+dm_unary(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    if (d->fault != 0xff)
+        return 1;
+    switch (v->fx_arg) {
+        case 0: *undef &= F_CF; break;
+        case 1: *undef = 0; break;
+        case 3: *undef = F_AF; break;
+        default: break;
+    }
+    return 1;
+}
+
+static void
+group_unary_mem(void)
+{
+    /* (opcode byte for 8-bit, ModRM reg field, kind): kind as fx_arg; reg
+       0xff for TEST r/m, r (84/85). */
+    static const struct {
+        uint8_t op, reg, kind, imm;
+    } ops[] = {
+        { 0xfe, 0, 0, 0 }, /* INC */
+        { 0xfe, 1, 0, 0 }, /* DEC */
+        { 0xf6, 3, 1, 0 }, /* NEG */
+        { 0xf6, 2, 2, 0 }, /* NOT */
+        { 0xf6, 0, 3, 1 }, /* TEST r/m, imm */
+        { 0x84, 0xff, 3, 0 }, /* TEST r/m, r */
+    };
+    const char    *name = "unary.mem";
+    struct variant v    = { .group = name, .fx = FX_CUSTOM, .defmask = dm_unary };
+    unsigned       k    = 0;
+    group_begin(name);
+    for (unsigned o = 0; o < sizeof(ops) / sizeof(ops[0]); o++) {
+        for (int size = 8; size <= 32; size *= 2) {
+            /* register (AH / ECX), memory, locked memory */
+            for (int form = 0; form < 3; form++) {
+                if (form == 2 && ops[o].kind == 3)
+                    continue; /* no LOCK TEST */
+                int n = 0;
+                if (form == 2)
+                    v.target[n++] = 0xf0;
+                n   = put_op(v.target, n, size, ops[o].op);
+                int reg = ops[o].reg == 0xff ? (size == 8 ? 2 : R_EDX) : ops[o].reg;
+                if (form == 0)
+                    v.target[n++] = MODRM_RR(reg, size == 8 ? 4 : R_ECX);
+                else
+                    v.target[n++] = 0x03 | (reg << 3);
+                if (ops[o].imm) {
+                    if (size == 8)
+                        v.target[n++] = imm8_edges[k % sizeof(imm8_edges)];
+                    else {
+                        put_le(v.target + n, imm32_edges[k % 5], size / 8);
+                        n += size / 8;
+                    }
+                }
+                k++;
+                v.target_len = n;
+                v.fx_arg     = ops[o].kind;
+                v.fix_input  = form ? fix_mem_ebx : 0;
+                v.arg        = MEM_OFF;
+                if (ops[o].kind == 0)
+                    run_flags(&v, 1); /* CF passes through */
+                else
+                    run_plain(&v, 2);
+            }
+        }
+    }
+    /* The one-byte INC and DEC (40-4F), 32- and 16-bit. */
+    for (int size16 = 0; size16 < 2; size16++) {
+        for (int r = 0; r < 16; r++) {
+            if ((r & 7) == R_ESP)
+                continue;
+            int n = 0;
+            if (size16)
+                v.target[n++] = 0x66;
+            v.target[n++] = 0x40 | r;
+            v.target_len  = n;
+            v.fx_arg      = 0;
+            v.fix_input   = 0;
+            run_plain(&v, 1);
+        }
+    }
+    group_end(name);
+}
