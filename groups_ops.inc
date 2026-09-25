@@ -1053,8 +1053,11 @@ fix_frame(const struct variant *v)
 
 /* SS on the 64 KB data segment (B = 0): pushes and pops move SP only (the
    upper half of ESP stays as it was), into free memory at 7800h; CALL,
-   ENTER, PUSHA and PUSHFD on it; and SP wrapping at 0. ESP and SS are
-   put back after. */
+   ENTER, PUSHA and PUSHFD on it. ESP and SS are put back after. Nothing
+   here may fault while SS is the 16-bit segment: at CPL 0 the fault's own
+   frame goes onto that stack (a push past its limit is #SS, #DF, then a
+   triple fault), so SP wrapping at 0 is r3.ss's, where a fault switches
+   stacks. */
 static void
 canon_stack16(const struct variant *v, const struct kin *in, struct kout *o)
 {
@@ -1105,16 +1108,14 @@ emit_stack16(struct emit *e, const struct variant *v)
 static void
 stack_16(const char *name)
 {
-    static const uint32_t esps[] = { 0xabcd7810, 0x00007810, 0x12340002 };
+    static const uint32_t esps[] = { 0xabcd7810, 0x00007810 };
     struct variant v = { .group = name, .faults_ok = 1, .emit = emit_stack16, .canon = canon_stack16,
                          .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
 #ifdef HOSTTEST
     return;
 #endif
     for (int k = 0; k < 7; k++) {
-        for (int s = 0; s < 3; s++) {
-            if (s == 2 && k != 0)
-                continue; /* SP wrapping at 0: once */
+        for (int s = 0; s < 2; s++) {
             v.target[0]  = 0x5a; /* for the reports */
             v.target[1]  = k;
             v.target[2]  = s;

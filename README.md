@@ -85,7 +85,7 @@ goes into the group that already covers it, not into a group of its own.
 | 13 | `bcd`         | DAA DAS AAA AAS AAM AAD (any base, AAM 0 = #DE), SALC           |
 | 14 | `string`      | MOVS CMPS STOS LODS SCAS, REP/REPE/REPNE, both directions, 16-bit addressing; overlapping REP MOVS both ways, long runs across pages, overrides moving only the source (FS past its limit, null ES), REP with ECX 0 checking nothing |
 | 15 | `popf.pushf`  | POPF/POPFD of any flags but TF and IF, PUSHF of every lazy state; IRETD at CPL 0 with IOPL, AC, ID, RF, VIF and VIP in the image |
-| 16 | `stack`       | PUSH ESP, POP [ESP], PUSHA/POPA, POP SS, ENTER (nesting 0-33), LEAVE; a 16-bit stack segment under 32-bit code: SP-only PUSH/POP/CALL/ENTER/PUSHAD/PUSHFD, ESP's upper half kept, SP wrapping at 0 (#SS) |
+| 16 | `stack`       | PUSH ESP, POP [ESP], PUSHA/POPA, POP SS, ENTER (nesting 0-33), LEAVE; a 16-bit stack segment under 32-bit code: SP-only PUSH/POP/CALL/ENTER/PUSHAD/PUSHFD, ESP's upper half kept |
 | 17 | `far.call`    | far CALL/JMP direct and indirect, RETF, RETF n, RET n, IRETD, in protected mode |
 | 18 | `int.ud`      | INT3, INT n, INTO, ICEBP, INT past the IDT (#GP), invalid encodings (#UD) |
 | 19 | `bound.arpl`  | BOUND inside, on and outside the bounds (#BR), ARPL             |

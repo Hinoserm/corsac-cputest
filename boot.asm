@@ -91,16 +91,38 @@ chs:
         jbe     .next
 
 loaded:
+        ; What was read must be what was written: the 16-bit sum of all its
+        ; words against the one build.py stored. A BIOS that reads wrong
+        ; data, or uses this memory, stops here with a message.
+        mov     bx, LOAD_SEG
+        mov     cx, IMAGE_SECTORS
+        xor     dx, dx
+.sum:   mov     es, bx
+        xor     di, di
+        push    cx
+        mov     cx, 256
+.word:  add     dx, [es:di]
+        add     di, 2
+        loop    .word
+        pop     cx
+        add     bx, 0x20                ; the next sector
+        loop    .sum
+        cmp     dx, IMAGE_SUM
+        je      .good
+        mov     si, msg_bad
+        call    print
+        jmp     fail.halt
+.good:
         mov     si, msg_run
         call    print
         call    LOAD_SEG:0x0003         ; as a BIOS calls an option ROM
 fail:
         mov     si, msg_fail
         call    print
-.halt:
+fail.halt:
         cli
         hlt
-        jmp     .halt
+        jmp     fail.halt
 
 print:
         lodsb
@@ -115,6 +137,7 @@ print:
 msg_load db "CPUTEST: loading", 13, 10, 0
 msg_run  db "CPUTEST: starting", 13, 10, 0
 msg_fail db "CPUTEST: disk read failed", 13, 10, 0
+msg_bad  db "CPUTEST: image damaged in memory", 13, 10, 0
 
 drive   db 0
         align 2

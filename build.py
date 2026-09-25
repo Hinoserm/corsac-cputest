@@ -74,8 +74,11 @@ def main():
 
     # Behind a boot sector, for a disk or a CF card: the boot sector loads
     # it and far-calls offset 3.
-    run(["nasm", "-f", "bin", "-DIMAGE_SECTORS=%d" % (size // 512), "-o", "boot.bin",
-         os.path.join(HERE, "boot.asm")])
+    # The boot sector checks what it loaded: the 16-bit sum of the loader's
+    # words, stored in it.
+    image_sum = sum(int.from_bytes(loader[i:i + 2], "little") for i in range(0, size, 2)) & 0xffff
+    run(["nasm", "-f", "bin", "-DIMAGE_SECTORS=%d" % (size // 512), "-DIMAGE_SUM=%d" % image_sum,
+         "-o", "boot.bin", os.path.join(HERE, "boot.asm")])
     boot = open(os.path.join(OUT, "boot.bin"), "rb").read()
     assert len(boot) == 512 and boot[510:] == b"\x55\xaa"
     img = boot + bytes(loader)
