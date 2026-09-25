@@ -208,3 +208,48 @@ group_r3_pvi(void)
     rx_run(&v, seqs, sizeof(seqs) / sizeof(seqs[0]));
     ring_end(v.group, CR4_PVI, 0);
 }
+
+/* ---- RDPMC and CR4.PCE ---------------------------------------------------------------- */
+
+/* RDPMC of counters 0, 1 and 2 (#GP: there are two) at CPL 0, and outside
+   it with and without CR4.PCE (setup 100000h). The counts are cleared
+   straight after: only whether it faults counts. Intel with MMX, and the
+   Pentium Pro. */
+static void
+pce_before(const struct variant *v)
+{
+    ring_setup(v);
+#ifndef HOSTTEST
+    cr4_set(CR4_PCE, v->arg3 & 0x100000);
+#endif
+}
+
+static void
+pce_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    cr4_set(CR4_PCE, 0);
+#endif
+}
+
+#define PMC(r, c, pce) { r, 0, 1, SEQ(0xb9, c, 0, 0, 0, 0x0f, 0x33, 0x31, 0xc0, 0x31, 0xd2), 0, (pce) ? 0x100000 : 0 }
+
+static void
+group_rdpmc_pce(void)
+{
+    static const struct rx_seq seqs[] = {
+        PMC(0, 0, 0), PMC(0, 1, 0), PMC(0, 2, 0), PMC(3, 0, 0), PMC(3, 0, 1),
+        PMC(3, 1, 1), PMC(3, 2, 1), PMC(1, 0, 0), PMC(1, 0, 1), PMC(2, 1, 1),
+    };
+    struct variant v      = { .group = "rdpmc.pce", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = pce_before,
+                              .after_run = pce_after, .fx = FX_CUSTOM, .defmask = dm_fxarg };
+    unsigned       family = (g_cpu.signature >> 8) & 0xf;
+    if (!is_vendor("GenuineIntel") || !(family == 6 || (family == 5 && (g_cpu.features & CPUID_MMX)))) {
+        group_skip(v.group, "not a Pentium MMX or Pentium Pro");
+        return;
+    }
+    if (!ring_begin(v.group, 0, 0))
+        return;
+    rx_run(&v, seqs, sizeof(seqs) / sizeof(seqs[0]));
+    ring_end(v.group, 0, 0);
+}
