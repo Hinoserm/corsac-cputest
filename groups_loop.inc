@@ -42,6 +42,20 @@ static const struct loop_def {
     { "loop.dec32", LK_UN, 32, 0x8d5, SEQ(0xff, 0xc8) },
     { "loop.neg32", LK_UN, 32, 0x8d5, SEQ(0xf7, 0xd8) },
     { "loop.not32", LK_UN, 32, 0x0c5, SEQ(0xf7, 0xd0) },
+    { "loop.rol16", LK_SHIFT, 16, 0x000, SEQ(0x66, 0xd3, 0xc0) },
+    { "loop.ror16", LK_SHIFT, 16, 0x000, SEQ(0x66, 0xd3, 0xc8) },
+    { "loop.rcl16", LK_SHIFT, 16, 0x000, SEQ(0x66, 0xd3, 0xd0) },
+    { "loop.rcr16", LK_SHIFT, 16, 0x000, SEQ(0x66, 0xd3, 0xd8) },
+    { "loop.shl16", LK_SHIFT, 16, 0x000, SEQ(0x66, 0xd3, 0xe0) },
+    { "loop.shr16", LK_SHIFT, 16, 0x000, SEQ(0x66, 0xd3, 0xe8) },
+    { "loop.sar16", LK_SHIFT, 16, 0x000, SEQ(0x66, 0xd3, 0xf8) },
+    { "loop.rol32", LK_SHIFT, 32, 0x000, SEQ(0xd3, 0xc0) },
+    { "loop.ror32", LK_SHIFT, 32, 0x000, SEQ(0xd3, 0xc8) },
+    { "loop.rcl32", LK_SHIFT, 32, 0x000, SEQ(0xd3, 0xd0) },
+    { "loop.rcr32", LK_SHIFT, 32, 0x000, SEQ(0xd3, 0xd8) },
+    { "loop.shl32", LK_SHIFT, 32, 0x000, SEQ(0xd3, 0xe0) },
+    { "loop.shr32", LK_SHIFT, 32, 0x000, SEQ(0xd3, 0xe8) },
+    { "loop.sar32", LK_SHIFT, 32, 0x000, SEQ(0xd3, 0xf8) },
 };
 
 #define LOOP_N 4096
@@ -208,4 +222,7 @@ group_loop(unsigned i)
 GA(group_loop, 0), GA(group_loop, 1), GA(group_loop, 2), GA(group_loop, 3), GA(group_loop, 4), GA(group_loop, 5), \
 GA(group_loop, 6), GA(group_loop, 7), GA(group_loop, 8), GA(group_loop, 9), GA(group_loop, 10), GA(group_loop, 11), \
 GA(group_loop, 12), GA(group_loop, 13), GA(group_loop, 14), GA(group_loop, 15), GA(group_loop, 16), GA(group_loop, 17), \
-GA(group_loop, 18), GA(group_loop, 19), GA(group_loop, 20), GA(group_loop, 21), GA(group_loop, 22), GA(group_loop, 23),
+GA(group_loop, 18), GA(group_loop, 19), GA(group_loop, 20), GA(group_loop, 21), GA(group_loop, 22), GA(group_loop, 23), \
+GA(group_loop, 24), GA(group_loop, 25), GA(group_loop, 26), GA(group_loop, 27), GA(group_loop, 28), GA(group_loop, 29), \
+GA(group_loop, 30), GA(group_loop, 31), GA(group_loop, 32), GA(group_loop, 33), GA(group_loop, 34), GA(group_loop, 35), \
+GA(group_loop, 36), GA(group_loop, 37),
