@@ -7,7 +7,7 @@
  * instead. These groups run with the ring GDT, IDT and TSS of
  * ring_env_on(); the others never see them. Ring 1 gets the most: it is
  * where CORSAC's sub-kernels run, with IOPL 1. The Linux build skips all
- * of it. Included into groups.inc after groups_paging.inc; append only.
+ * of it. Included into groups.inc after groups_paging.inc.
  */
 
 #define RING_FMASK 0x001f3fd5u /* arithmetic flags, DF, IF, TF, IOPL, NT-less: RF VM AC VIF VIP */

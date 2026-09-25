@@ -1,6 +1,6 @@
 /*
  * General groups beyond the recompiler's interpreter list. Included into
- * groups.inc after groups_p6.inc; append only.
+ * groups.inc after groups_p6.inc.
  */
 
 /* Defined or not, per variant: arg3. */
@@ -224,6 +224,112 @@ seg_restore(void)
 #endif
 }
 
+/* LDS LES LFS LGS LSS from a far pointer in the buffer, 32- and 16-bit
+   offsets, with a data, null, code, 64 KB and out-of-GDT selector; what
+   was loaded is read back with MOV CX, Sreg. DS and ES are put back
+   straight after; LSS's SS:ESP too, ESP kept in EDI meanwhile (which then
+   holds the loaded offset), SS through AX. */
+static void
+segments_lds(const char *name)
+{
+    static const struct {
+        uint8_t n, op[2], sreg;
+    } ops[] = {
+        { 1, { 0xc5 }, 3 },       /* lds */
+        { 1, { 0xc4 }, 0 },       /* les */
+        { 2, { 0x0f, 0xb4 }, 4 }, /* lfs */
+        { 2, { 0x0f, 0xb5 }, 5 }, /* lgs */
+        { 2, { 0x0f, 0xb2 }, 2 }, /* lss */
+    };
+    static const uint8_t sels[] = { 0x10, 0x00, 0x08, 0x20, 0x28 };
+    struct variant v = { .group = name, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+#ifdef HOSTTEST
+    return;
+#endif
+    for (unsigned o = 0; o < sizeof(ops) / sizeof(ops[0]); o++) {
+        int sr = ops[o].sreg;
+        for (int w = 0; w < 2; w++) {
+            for (unsigned s = 0; s < sizeof(sels); s++) {
+                int      n = 0;
+                uint8_t *t = v.target;
+                t[n++]     = 0x66; /* mov word [ebx+4 or +2], sel */
+                t[n++]     = 0xc7;
+                t[n++]     = 0x43;
+                t[n++]     = w ? 2 : 4;
+                t[n++]     = sels[s];
+                t[n++]     = 0;
+                if (sr == 2) {
+                    t[n++] = 0x89; /* mov edi, esp */
+                    t[n++] = 0xe7;
+                }
+                if (w)
+                    t[n++] = 0x66;
+                memcpy(t + n, ops[o].op, ops[o].n);
+                n += ops[o].n;
+                t[n++] = 0x33; /* esi, [ebx] */
+                t[n++] = 0x66; /* mov cx, sreg */
+                t[n++] = 0x8c;
+                t[n++] = 0xc1 | (sr << 3);
+                if (sr == 2) {
+                    t[n++] = 0x87; /* xchg edi, esp */
+                    t[n++] = 0xe7;
+                }
+                if (sr != 4 && sr != 5) {
+                    t[n++] = 0x66; /* mov ax, 10h; mov sreg, ax */
+                    t[n++] = 0xb8;
+                    t[n++] = 0x10;
+                    t[n++] = 0x00;
+                    t[n++] = 0x8e;
+                    t[n++] = 0xc0 | (sr << 3);
+                }
+                v.target_len = n;
+                run_plain(&v, 1);
+            }
+        }
+    }
+}
+
+/* MOV r32, Sreg (the upper half: zero on a P6, the model's own before),
+   MOV r16, Sreg, MOV [m], Sreg (16 bits), and PUSH Sreg with a 32-bit
+   operand onto a slot holding FFFFFFFFh: a 16-bit write or a zero-
+   extended one. Raw. */
+static void
+segments_sreg(const char *name)
+{
+    static const uint8_t pushes[6][2] = { { 0x06 }, { 0x0e }, { 0x16 }, { 0x1e }, { 0x0f, 0xa0 }, { 0x0f, 0xa8 } };
+    struct variant v = { .group = name, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 0,
+                         .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+    for (int s = 0; s < 6; s++) {
+        uint8_t mod = 0xc0 | (s << 3); /* ModRM for Sreg s */
+        v.target[0] = 0x8c;             /* mov eax, sreg (EAX random going in) */
+        v.target[1] = mod;
+        v.target_len = 2;
+        run_plain(&v, 1);
+        v.target[0] = 0x66; /* mov ax, sreg */
+        v.target[1] = 0x8c;
+        v.target[2] = mod;
+        v.target_len = 3;
+        run_plain(&v, 1);
+        v.target[0] = 0x8c; /* mov [ebx], sreg */
+        v.target[1] = 0x03 | (s << 3);
+        v.target_len = 2;
+        run_plain(&v, 1);
+        int n = 0; /* mov dword [esp-4], -1; push sreg; pop eax */
+        v.target[n++] = 0xc7;
+        v.target[n++] = 0x44;
+        v.target[n++] = 0x24;
+        v.target[n++] = 0xfc;
+        put_le(v.target + n, 0xffffffff, 4);
+        n += 4;
+        v.target[n++] = pushes[s][0];
+        if (pushes[s][1])
+            v.target[n++] = pushes[s][1];
+        v.target[n++] = 0x58;
+        v.target_len  = n;
+        run_plain(&v, 1);
+    }
+}
+
 static void
 group_segments(void)
 {
@@ -275,5 +381,7 @@ group_segments(void)
             seg_restore();
         }
     }
+    segments_lds(name);
+    segments_sreg(name);
     group_end(name);
 }

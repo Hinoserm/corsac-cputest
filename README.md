@@ -48,8 +48,9 @@ landing in the harness.
 
 ## Groups
 
-New groups only go at the end, so each group's CRCs stay comparable
-between versions until the group itself changes.
+A group's CRCs stay comparable between versions until the group itself
+changes (its `def=` fingerprint says when). A new test for an instruction
+goes into the group that already covers it, not into a group of its own.
 
 | # | group          | what                                                            |
 |---|----------------|-----------------------------------------------------------------|
@@ -66,29 +67,29 @@ between versions until the group itself changes.
 | 11 | `bsf.bsr`     | zero, single-bit and random sources                             |
 | 12 | `cmpxchg.xadd` | CMPXCHG, XADD, LOCK forms, #UD for LOCK on a register, CMPXCHG8B |
 | 13 | `bcd`         | DAA DAS AAA AAS AAM AAD (any base, AAM 0 = #DE), SALC           |
-| 14 | `string`      | MOVS CMPS STOS LODS SCAS, REP/REPE/REPNE, both directions, 16-bit addressing |
-| 15 | `popf.pushf`  | POPF/POPFD of any flags but TF and IF, PUSHF of every lazy state |
-| 16 | `stack`       | PUSH ESP, POP [ESP], PUSHA/POPA, POP SS, ENTER (nesting 0-33), LEAVE |
+| 14 | `string`      | MOVS CMPS STOS LODS SCAS, REP/REPE/REPNE, both directions, 16-bit addressing; overlapping REP MOVS both ways, long runs across pages, overrides moving only the source (FS past its limit, null ES), REP with ECX 0 checking nothing |
+| 15 | `popf.pushf`  | POPF/POPFD of any flags but TF and IF, PUSHF of every lazy state; IRETD at CPL 0 with IOPL, AC, ID, RF, VIF and VIP in the image |
+| 16 | `stack`       | PUSH ESP, POP [ESP], PUSHA/POPA, POP SS, ENTER (nesting 0-33), LEAVE; a 16-bit stack segment under 32-bit code: SP-only PUSH/POP/CALL/ENTER/PUSHAD/PUSHFD, ESP's upper half kept, SP wrapping at 0 (#SS) |
 | 17 | `far.call`    | far CALL/JMP direct and indirect, RETF, RETF n, RET n, IRETD, in protected mode |
 | 18 | `int.ud`      | INT3, INT n, INTO, ICEBP, INT past the IDT (#GP), invalid encodings (#UD) |
 | 19 | `bound.arpl`  | BOUND inside, on and outside the bounds (#BR), ARPL             |
-| 20 | `misc`        | XLAT, CMC CLC STC CLD STD, WAIT, PAUSE, XCHG with memory        |
+| 20 | `misc`        | XLAT, CMC CLC STC CLD STD, WAIT, PAUSE, XCHG with memory; XLAT with ES:/CS: overrides, a null FS (#GP) and 16-bit addressing |
 | 21 | `mmx`         | every MMX instruction: arithmetic, packs, compares, shifts by register and immediate (with the #UD holes), MOVD/MOVQ |
 | 22 | `mmx.x87`     | EMMS and the x87 tag and status words after MMX, EMMS and FLD   |
 | 23 | `3dnow`       | 3DNow! and the K6-2+/K6-III+ extensions, FEMMS, PREFETCH(W)     |
-| 24 | `cmov`        | CMOVcc, all conditions, 16/32-bit, register and memory, after every producer (P6 on) |
+| 24 | `cmov`        | CMOVcc, all conditions, 16/32-bit, register and memory, after every producer (P6 on); CMOVZ from a bad FS operand with the condition false (the P6 reads it anyway) |
 | 25 | `rdtsc`       | two RDTSCs back to back: the difference is positive and small (Pentium on) |
 | 26 | `nop.p6`      | multi-byte NOP and the reserved NOPs 0F 19-1E: NOPs on P6, #UD before; its CRCs differ by family on purpose |
 | 27 | `smc`         | self-modifying code: patched immediates and opcodes, and a loop that repatches its own block; without a jump only in `crc_raw` (a 486 may run stale prefetched bytes) |
-| 28 | `segments`    | FS/GS loads of good, null, 16-bit, RPL-3, out-of-GDT and LDT selectors (#GP), limits, LFS/LGS, MOV from Sreg, LAR LSL VERR VERW |
+| 28 | `segments`    | FS/GS loads of good, null, 16-bit, RPL-3, out-of-GDT and LDT selectors (#GP), limits, LFS/LGS, MOV from Sreg, LAR LSL VERR VERW; LDS LES LFS LGS LSS with 16/32-bit offsets and data, null, code, 64 KB and out-of-GDT selectors; MOV r32/r16/m16 from every Sreg and PUSH Sreg's write width |
 | 29 | `exhaust8`    | every input of the 8-bit flag math, walked by a loop inside the test: ADD..CMP × AL × BL × CF, INC DEC NEG NOT, shifts and rotates × counts 0-31, DAA DAS AAA AAS × AF × CF, MUL IMUL, AAM AAD, SAHF |
 | 30 | `lea`         | every 32-bit ModRM form, SIB with every base and every index×scale at each mod, every 16-bit form, displacement edges, ESP as the base |
 | 31 | `alu.mem`     | the eight ALU ops on memory: both directions, 80/81/83 immediates at their edges, every size, LOCK (#UD on CMP), misaligned |
 | 32 | `unary.mem`   | INC DEC NEG NOT TEST, register and memory, every size, LOCK, and the one-byte INC/DEC; INC/DEC after every producer (CF passes through) |
 | 33 | `jcc.loop`    | all 16 Jcc, short and near, after every producer; JECXZ/JCXZ; LOOP/LOOPE/LOOPNE over a real body, 32- and 16-bit counts (CX = 0: 65536 times) |
 | 34 | `mov.forms`   | moffs A0-A3, C6/C7 through [reg+disp32] (a form 86Box's recompiler interprets on purpose), MOV to/from memory with high bytes, SIB, misaligned, FS:, CBW CWDE CWD CDQ |
-| 35 | `prefixes`    | repeated and ignored prefixes, prefix order, stacked segment overrides, branch hints, and the 15-byte limit (#GP at 16) |
-| 36 | `code16`      | code in a 16-bit protected-mode segment (Windows 3.x/9x, DOS extenders): ALU at 16 and 32 bits, SETcc and Jcc after every producer, every 16-bit address form, MOVZX/MOVSX, PUSH/POP/PUSHF, MUL/DIV edges, string ops over SI/DI, LOOP over CX, near CALL/RET |
+| 35 | `prefixes`    | repeated and ignored prefixes, prefix order, stacked segment overrides, branch hints, and the 15-byte limit (#GP at 16); LOCK on XCHG and BTS/BTR/BTC memory, #UD on every other LOCK form; CS: writes (#GP), null FS, SS:/ES:, LODS from CS:, the last of two overrides |
+| 36 | `code16`      | code in a 16-bit protected-mode segment (Windows 3.x/9x, DOS extenders): ALU at 16 and 32 bits, SETcc and Jcc after every producer, every 16-bit address form, MOVZX/MOVSX, PUSH/POP/PUSHF, MUL/DIV edges, string ops over SI/DI, LOOP over CX, near CALL/RET; running up to and off the end of the 64 KB segment (#GP), 66/67 on CALL rel32, RET, PUSH imm, LOOP and PUSHFD |
 | 37-178 | `loop.<op><size>` | sampled loops, 4096 edge-biased operand sets each, results and flags folded into checksums: ADD OR ADC SBB AND SUB XOR CMP at 16 and 32 bits; INC DEC NEG NOT; ROL ROR RCL RCR SHL SHR SAR by every count; SHLD SHRD; MUL IMUL (one-operand), IMUL r,r/m and IMUL r,r/m,imm; DIV IDIV at 8, 16 and 32 bits, constrained to fit; BSF BSR (non-zero sources); BT BTS BTR BTC with a register offset; XADD CMPXCHG at 8, 16 and 32 bits (a quarter equal); BSWAP; MMX: every arithmetic, logic, compare, pack and unpack instruction; MMX shifts by register, counts at every lane edge; 3DNow! (exact ones in the defined CRC, the rest raw); the K6-2+/K6-III+ 3DNow! extensions |
 | 179-194 | `opmap.0f<row>x` | every 0F xx of the row, register and memory form, behind a trailer that is harmless at any length: which encodings run and which #UD, per model (raw CRC only). INVD, MOV CR/DR/TR, the MSR and counter reads, LOADALL, SMINT (0F 38), BSWAP ESP (0F CC) and PUSH/POP FS/GS are left out, near Jcc runs over a MOV instead of the trailer, and the memory forms of LSS and the bit-string instructions with a register offset |
 | 195 | `aliases` | undocumented aliases: 82h, TEST /1, SAL /6, LOCK 82h, PREFETCH /2; and the #UD sub-opcodes of 8F, C6, C7, FE, FF |
@@ -163,7 +164,7 @@ between versions until the group itself changes.
 | 264 | `cr0.write` | each CR0 flag set or cleared alone and read back; NW without CD (#GP); CD with and without NW; reserved bits (raw) |
 | 265 | `cr4.bits` | every CR4 bit alone, read back: which a model has, and whether one it lacks is ignored or #GP (raw) |
 | 266 | `cr0.ts` | CR0 EM/TS/MP combinations against WAIT, FNOP, FNINIT, FLD1, EMMS, MOVD and FEMMS: #NM, #UD or run |
-| 267 | `lmsw` | LMSW never clears PE and reaches only its four bits; SMSW to a register and to memory |
+| 267 | `lmsw` | LMSW never clears PE and reaches only its four bits; SMSW to a register and to memory; SGDT/SIDT at 32 and 16 bits, SLDT/STR to r32, r16 and memory |
 | 268 | `cr23.rw` | CR2 and CR3 written and read back (CR3's low bits raw) |
 | 269 | `tsc.msr` | RDMSR of the TSC agrees with RDTSC |
 | 270 | `desc.accessed` | segment loads set a descriptor's accessed bit; LAR, LSL, VERR and VERW don't (the GDT read back, CPL 0 and 3) |
@@ -173,34 +174,20 @@ between versions until the group itself changes.
 | 274 | `task.call` | task switches by CALL to a TSS, a GDT task gate and an IDT task gate (from rings 0 and 3): the new task's registers, TR, NT and back link; IRET back, TR and busy bits after |
 | 275 | `task.jmp` | task switches by JMP to a TSS and a task gate and back: no nesting, no back link |
 | 276 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
-| 277 | `lock.legal` | LOCK on every lockable instruction with a memory destination, and #UD on CMP, TEST, MOV, BT, PUSH/POP, the register forms and one-byte INC |
-| 278 | `segovr` | segment overrides: CS: reads but not writes, a null FS, a 64 KB segment's limit, LODS from CS:, the last of two overrides counts |
-| 279 | `lds.forms` | LDS LES LFS LGS LSS with 32- and 16-bit offsets and a data, null, code, 64 KB and out-of-GDT selector |
-| 280 | `stack16` | a 16-bit stack segment: PUSH/POP, CALL, ENTER, PUSHAD, PUSHFD move SP only, the upper half of ESP kept; SP wrapping at 0 (#SS) |
-| 281 | `string.overlap` | REP MOVSB/W/D over overlapping source and destination, both directions, and a count of 0 |
-| 282 | `string.long` | long REP STOS, MOVS, CMPS and SCAS across the sandbox's pages, unaligned and backwards |
-| 283 | `sreg.upper` | MOV r32/r16/m16, Sreg for every segment register, and PUSH Sreg with a 32-bit operand: how much of the slot is written |
-| 284 | `lar.systypes` | LAR, LSL and VERR of each of the 16 system descriptor types |
-| 285 | `seg.types` | each of the 16 code/data types at DPL 0 from ring 0 and DPL 3 from ring 3: VERR, VERW, a load into FS, a read and a write |
-| 286 | `idt.types` | INT through a not-present gate, a gate of type 0, a 386 trap gate, gates with a data or null selector, from rings 0 and 3 |
-| 287 | `idt.limit` | INT past a shortened IDT's limit, and to a gate only half inside it (#GP with the IDT bit), from rings 0 and 3 |
-| 288 | `code16.limit` | 16-bit code running up to the end of its 64 KB segment, and one or two bytes past it (#GP) |
-| 289 | `code16.opsize` | 66 and 67 in 16-bit code: CALL rel32 and o32 RET, PUSH imm by size, LOOP by ECX and by CX, PUSHFD |
-| 290 | `sgdt.forms` | SGDT and SIDT with 32- and 16-bit operands, SLDT and STR to 32- and 16-bit registers and memory |
-| 291 | `iret.flags` | IRETD at CPL 0 with EFLAGS images carrying IOPL, AC, ID, RF, VIF and VIP: which of them stick |
-| 292 | `xlat` | XLAT with DS, ES: and CS: overrides, a null FS (#GP) and 16-bit addressing |
-| 293 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
-| 294 | `r3.pvi` | CR4.PVI: CLI and STI change VIF at CPL 3, STI with VIP set #GP, POPFD leaves IF and VIF, IOPL 3 and rings 1-2 unaffected |
-| 295 | `rdpmc.pce` | RDPMC of counters 0-2 at CPL 0, and at CPL 1-3 with and without CR4.PCE (Pentium MMX, Pentium Pro) |
-| 296 | `pg.rmw` | CMPXCHG, CMPXCHG8B, XADD and locked BTS/ADD on a read-only page (WP), compare equal and not; the dirty bit after a failed compare |
-| 297 | `pg.pde` | the alias page through a read-only or not-present PDE (WP): reads, writes, CR2, and the PDE's and PTE's A and D bits |
-| 298 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
-| 299 | `r3.pde` | the alias page from rings 1-3 with the PDE or PTE supervisor-only, the PDE read-only or not present |
-| 300 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
-| 301 | `string.segs` | segment overrides move the string source, never ES:EDI; null ES; REP with ECX 0 checks nothing; REP STOS past ES's limit |
-| 302 | `iret.frames` | IRETD at CPL 0 through bad frames: null, data, RPL-0 and out-of-GDT CS; null, mismatched, DPL-0, read-only, not-present and TSS SS; DS/ES/FS nulled on the way out |
-| 303 | `sysops.ud` | SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 0 and 3 with nothing set up |
-| 304 | `cmov.fault` | CMOVZ from a bad FS operand (past the limit, null) or DS, condition true and false, 32- and 16-bit |
+| 277 | `lar.systypes` | LAR, LSL and VERR of each of the 16 system descriptor types |
+| 278 | `seg.types` | each of the 16 code/data types at DPL 0 from ring 0 and DPL 3 from ring 3: VERR, VERW, a load into FS, a read and a write |
+| 279 | `idt.types` | INT through a not-present gate, a gate of type 0, a 386 trap gate, gates with a data or null selector, from rings 0 and 3 |
+| 280 | `idt.limit` | INT past a shortened IDT's limit, and to a gate only half inside it (#GP with the IDT bit), from rings 0 and 3 |
+| 281 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
+| 282 | `r3.pvi` | CR4.PVI: CLI and STI change VIF at CPL 3, STI with VIP set #GP, POPFD leaves IF and VIF, IOPL 3 and rings 1-2 unaffected |
+| 283 | `rdpmc.pce` | RDPMC of counters 0-2 at CPL 0, and at CPL 1-3 with and without CR4.PCE (Pentium MMX, Pentium Pro) |
+| 284 | `pg.rmw` | CMPXCHG, CMPXCHG8B, XADD and locked BTS/ADD on a read-only page (WP), compare equal and not; the dirty bit after a failed compare |
+| 285 | `pg.pde` | the alias page through a read-only or not-present PDE (WP): reads, writes, CR2, and the PDE's and PTE's A and D bits |
+| 286 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
+| 287 | `r3.pde` | the alias page from rings 1-3 with the PDE or PTE supervisor-only, the PDE read-only or not present |
+| 288 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
+| 289 | `iret.frames` | IRETD at CPL 0 through bad frames: null, data, RPL-0 and out-of-GDT CS; null, mismatched, DPL-0, read-only, not-present and TSS SS; DS/ES/FS nulled on the way out |
+| 290 | `sysops.ud` | SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 0 and 3 with nothing set up |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

@@ -5,7 +5,7 @@
  * table the tests point wherever they need. Before each run the tables
  * are put back and the TLB flushed, so every run starts the same. The
  * Linux build skips these groups. Included into groups.inc after
- * groups_cpu.inc; append only.
+ * groups_cpu.inc.
  */
 
 #define PG_DIR    0x200000u  /* the page directory */
@@ -204,13 +204,6 @@ group_pg_basic(void)
         run_plain(&v, 2);
     }
     pg_end(name);
-}
-
-/* Defined or raw only, per variant: fx_arg. */
-static int
-dm_fxarg(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
-{
-    return v->fx_arg;
 }
 
 /* A table of byte sequences run with one page setup each. */

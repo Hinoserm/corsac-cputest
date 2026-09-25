@@ -2,7 +2,7 @@
  * CPU-specific groups: undocumented aliases, CPUID, the MSRs a model has,
  * the TSC, and the Cyrix configuration registers. Most results are per
  * model, so they go into the raw CRC only. Included into groups.inc after
- * groups_map.inc; append only.
+ * groups_map.inc.
  */
 
 #define CPUID_MSR (1u << 5)

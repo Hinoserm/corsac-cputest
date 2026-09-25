@@ -1,6 +1,6 @@
 /*
  * Exhaustive 8-bit flag math. Included into groups.inc after
- * groups_more.inc; append only.
+ * groups_more.inc.
  */
 
 /* ---- exhaustive 8-bit flag math ------------------------------------------- */

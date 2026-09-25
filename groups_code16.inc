@@ -1,9 +1,70 @@
+/* 16-bit code placed so its last byte is the segment's last (FFFFh), or
+   one byte past it: running off the end is #GP. */
+static void
+code16_limit(const char *name)
+{
+    static const struct {
+        uint8_t len, b[4];
+    } bodies[] = { { SEQ(0x01, 0xd1) }, { SEQ(0x90, 0x90, 0x90) }, { SEQ(0x66, 0x01, 0xd1) } };
+    struct variant v = { .group = name, .code16 = 1, .faults_ok = 1 };
+    for (unsigned i = 0; i < sizeof(bodies) / sizeof(bodies[0]); i++) {
+        for (int over = 0; over < 3; over++) {
+            memcpy(v.target, bodies[i].b, bodies[i].len);
+            v.target_len = bodies[i].len;
+            /* the body plus the final o32 RETF (2 bytes), and no producer */
+            v.code16_ip = (uint16_t) (0x10000 - (bodies[i].len + 2) + over);
+            v.producer  = 0;
+            v.boundary  = 0;
+            run_inputs(&v, 1);
+        }
+    }
+    v.code16_ip = 0;
+}
+
+/* Operand- and address-size prefixes in 16-bit code: CALL rel32 and RET
+   with 66 (32-bit return addresses), PUSH imm with and without, LOOP by
+   ECX (67) and by CX, PUSHFD. */
+static void
+fix_c16loop(const struct variant *v)
+{
+    g_in.ecx = 1 + (rnd() & 3);
+    if (v->arg2) /* LOOP by CX: the upper half must stay out of it */
+        g_in.ecx |= rnd() & 0xffff0000u;
+}
+
+static void
+code16_opsize(const char *name)
+{
+    static const struct {
+        uint8_t fix, len, b[12];
+    } seqs[] = {
+        { 0, SEQ(0x66, 0xe8, 0x01, 0x00, 0x00, 0x00, 0x90, 0x66, 0x5e) },       /* call rel32 over a nop; pop esi */
+        { 0, SEQ(0xe8, 0x01, 0x00, 0x90, 0x5e) },                               /* call rel16; pop si */
+        { 0, SEQ(0x66, 0xe8, 0x02, 0x00, 0x00, 0x00, 0xeb, 0x02, 0x66, 0xc3) }, /* call; jmp over; L: ret with 66 */
+        { 0, SEQ(0x66, 0x6a, 0xff, 0x66, 0x58) },                               /* push dword -1; pop eax */
+        { 0, SEQ(0x6a, 0xff, 0x58) },                                           /* push word -1; pop ax */
+        { 1, SEQ(0x46, 0x67, 0xe2, 0xfc) },                                     /* L: inc si; loop L by ECX */
+        { 2, SEQ(0x46, 0xe2, 0xfd) },                                           /* L: inc si; loop L by CX */
+        { 0, SEQ(0x66, 0x9c, 0x66, 0x5e) },                                     /* pushfd; pop esi */
+    };
+    struct variant v = { .group = name, .code16 = 1, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.fix_input  = seqs[i].fix ? fix_c16loop : 0;
+        v.arg2       = seqs[i].fix == 2;
+        v.reg_fix    = 1;
+        v.fx_arg     = i != 7; /* PUSHFD holds the producer's undefined flags */
+        run_plain(&v, 2);
+    }
+}
+
 /*
  * Code in a 16-bit protected-mode segment: what Windows 3.x and 9x and
  * DOS extenders run. The harness far-calls the producer and the target
  * through a 16-bit code descriptor (see code16_base()), so operand and
  * address size default to 16 bits and the 66/67 prefixes select 32.
- * Included into groups.inc after groups_mem.inc; append only. Not run by
+ * Included into groups.inc after groups_mem.inc. Not run by
  * the Linux build (no far calls into our own GDT there).
  */
 
@@ -148,5 +209,7 @@ group_code16(void)
             run_keep(&v, 4);
         }
     }
+    code16_limit(name);
+    code16_opsize(name);
     group_end(name);
 }

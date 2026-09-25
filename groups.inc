@@ -2,9 +2,11 @@
  * The test groups. Included into harness.c.
  *
  * Each group builds variants (the bytes under test, what runs before them,
- * whether they start a block) and runs each with a few inputs. The order of
- * groups and the variants inside a group never change once a result has
- * been recorded: the CRCs depend on them. Add new groups at the end.
+ * whether they start a block) and runs each with a few inputs. A stored
+ * reference is keyed by the group's name and the fingerprint of its
+ * definition (def=), so a group that changes just has no reference until
+ * one is recorded again. A new test for an instruction goes into the group
+ * that already covers it, not into a group of its own.
  *
  * How much each variant runs:
  * - Inputs: where an instruction's edge cases are known (a count of 0, a
@@ -54,6 +56,13 @@ fix_mem16(const struct variant *v)
 #endif
     g_in.ebx = (rnd() & 0xffff0000) | (uint32_t) LOWBUF;
     g_in.edi = (rnd() & 0xffff0000) | (rnd() & 7);
+}
+
+/* Defined or raw only, per variant: fx_arg. */
+static int
+dm_fxarg(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    return v->fx_arg;
 }
 
 static void
@@ -519,22 +528,10 @@ static const struct group_def groups[] = {
     G(group_task_call),
     G(group_task_jmp),
     G(group_task_errors),
-    G(group_lock_legal),
-    G(group_segovr),
-    G(group_lds_forms),
-    G(group_stack16),
-    G(group_string_overlap),
-    G(group_string_long),
-    G(group_sreg_upper),
     G(group_lar_systypes),
     G(group_seg_types),
     G(group_idt_types),
     G(group_idt_limit),
-    G(group_code16_limit),
-    G(group_code16_opsize),
-    G(group_sgdt_forms),
-    G(group_iret_flags),
-    G(group_xlat),
     G(group_syscall),
     G(group_r3_pvi),
     G(group_rdpmc_pce),
@@ -543,10 +540,8 @@ static const struct group_def groups[] = {
     G(group_pg_global),
     G(group_r3_pde),
     G(group_cyrix_emmi),
-    G(group_string_segs),
     G(group_iret_frames),
     G(group_sysops_ud),
-    G(group_cmov_fault),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

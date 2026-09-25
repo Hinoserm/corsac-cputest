@@ -1,6 +1,6 @@
 /*
  * Addressing and memory forms. Included into groups.inc after
- * groups_exhaust.inc; append only.
+ * groups_exhaust.inc.
  */
 
 /* ---- LEA: every ModRM and SIB addressing form ------------------------------ */
@@ -496,6 +496,82 @@ group_mov_forms(void)
 
 /* ---- prefixes -------------------------------------------------------------- */
 
+/* LOCK where the other groups don't reach: XCHG and the bit-test-and-
+   modify instructions on memory run; everything else with LOCK, and
+   those with a register destination, is #UD. (The locked ALU, INC, DEC,
+   NOT, NEG, CMPXCHG, XADD and CMPXCHG8B forms are in alu.mem, unary.mem
+   and cmpxchg.xadd.) The bit tests leave everything but CF undefined:
+   raw only. */
+static void
+prefixes_lock(const char *name)
+{
+    static const struct {
+        uint8_t defined, len, b[7];
+    } seqs[] = {
+        { 1, SEQ(0xf0, 0x86, 0x03) },             /* xchg [ebx], al */
+        { 1, SEQ(0xf0, 0x87, 0x03) },             /* xchg [ebx], eax */
+        { 0, SEQ(0x83, 0xe0, 0x1f, 0xf0, 0x0f, 0xab, 0x03) }, /* and eax, 31; bts [ebx], eax */
+        { 0, SEQ(0x83, 0xe0, 0x1f, 0xf0, 0x0f, 0xb3, 0x03) }, /* btr */
+        { 0, SEQ(0x83, 0xe0, 0x1f, 0xf0, 0x0f, 0xbb, 0x03) }, /* btc */
+        { 0, SEQ(0xf0, 0x0f, 0xba, 0x2b, 0x05) }, /* bts [ebx], 5 */
+        { 0, SEQ(0xf0, 0x0f, 0xba, 0x33, 0x05) }, /* btr [ebx], 5 */
+        { 0, SEQ(0xf0, 0x0f, 0xba, 0x3b, 0x05) }, /* btc [ebx], 5 */
+        { 1, SEQ(0xf0, 0x03, 0x03) },             /* add eax, [ebx]: destination a register: #UD */
+        { 1, SEQ(0xf0, 0x85, 0x03) },             /* test: #UD */
+        { 1, SEQ(0xf0, 0xf6, 0x03, 0x01) },       /* test byte [ebx], 1: #UD */
+        { 1, SEQ(0xf0, 0x88, 0x03) },             /* mov [ebx], al: #UD */
+        { 1, SEQ(0xf0, 0x8b, 0x03) },             /* mov eax, [ebx]: #UD */
+        { 1, SEQ(0xf0, 0x8d, 0x03) },             /* lea: #UD */
+        { 1, SEQ(0x83, 0xe0, 0x1f, 0xf0, 0x0f, 0xa3, 0x03) }, /* bt [ebx], eax: #UD */
+        { 1, SEQ(0xf0, 0x0f, 0xba, 0x23, 0x05) }, /* bt [ebx], 5: #UD */
+        { 1, SEQ(0xf0, 0xff, 0x33) },             /* push [ebx]: #UD */
+        { 1, SEQ(0xf0, 0x8f, 0x03) },             /* pop [ebx]: #UD */
+        { 1, SEQ(0xf0, 0xf7, 0x23) },             /* mul dword [ebx]: #UD */
+        { 1, SEQ(0xf0, 0x0f, 0xb6, 0x03) },       /* movzx: #UD */
+        { 1, SEQ(0xf0, 0x0f, 0xbc, 0x03) },       /* bsf: #UD */
+        { 1, SEQ(0xf0, 0x01, 0xc8) },             /* add eax, ecx: #UD */
+        { 1, SEQ(0xf0, 0x87, 0xc8) },             /* xchg eax, ecx: #UD */
+        { 1, SEQ(0xf0, 0xff, 0xc0) },             /* inc eax: #UD */
+        { 1, SEQ(0xf0, 0x40) },                   /* inc eax (one byte): #UD */
+    };
+    struct variant v = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg,
+                         .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.fx_arg     = seqs[i].defined;
+        run_plain(&v, 1);
+    }
+}
+
+/* CS: reads (a readable code segment) but can't write; SS: and ES: are
+   data; a null FS faults on use; a 64 KB segment ends before the buffer;
+   with two overrides the last counts (flat ones and FS: GS: are above). */
+static void
+prefixes_segovr(const char *name)
+{
+    static const struct {
+        uint8_t len, b[12];
+    } seqs[] = {
+        { SEQ(0x2e, 0x89, 0x03) },                               /* mov cs:[ebx], eax: #GP */
+        { SEQ(0x2e, 0x8b, 0x03) },                               /* mov eax, cs:[ebx] */
+        { SEQ(0x36, 0x8b, 0x03) },                               /* ss: */
+        { SEQ(0x26, 0x89, 0x0b) },                               /* es: write */
+        { SEQ(0x66, 0xb8, 0x00, 0x00, 0x8e, 0xe0, 0x64, 0x8b, 0x03) }, /* fs = 0; fs: read: #GP */
+        { SEQ(0x66, 0xb8, 0x00, 0x00, 0x8e, 0xe0, 0x64, 0x89, 0x0b) }, /* fs: write */
+        { SEQ(0x66, 0xb8, 0x20, 0x00, 0x8e, 0xe0, 0x64, 0x8b, 0x03) }, /* fs = 64 KB data: past its limit */
+        { SEQ(0x89, 0xde, 0x2e, 0xad) },                         /* lodsd from cs: */
+        { SEQ(0x3e, 0x2e, 0x89, 0x03) },                         /* ds: cs: write: CS counts */
+        { SEQ(0x2e, 0x3e, 0x89, 0x03) },                         /* cs: ds: write: DS counts */
+    };
+    struct variant v = { .group = name, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        run_plain(&v, 1);
+    }
+}
+
 /* Repeated and ignored prefixes, prefix order, and the 15-byte limit on an
    instruction's length (#GP past it). */
 static void
@@ -536,5 +612,7 @@ group_prefixes(void)
             run_plain(&v, 2);
         }
     }
+    prefixes_lock(name);
+    prefixes_segovr(name);
     group_end(name);
 }

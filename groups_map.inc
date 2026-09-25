@@ -2,7 +2,7 @@
  * Opcode maps and aliases: which encodings a CPU executes and which raise
  * #UD, the way Windows setup and CPU detection code probe them. Results
  * are per model, so these go into the raw CRC only. Included into
- * groups.inc after groups_loop.inc; append only.
+ * groups.inc after groups_loop.inc.
  */
 
 /* 0F xx opcodes never run here, in either form:

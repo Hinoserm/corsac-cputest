@@ -3,7 +3,7 @@
  * gates through TI=1 selectors), and task switches by CALL, JMP, task
  * gates in the GDT and the IDT, IRET with NT, and the errors they raise.
  * All with the ring tables of ring_env_on(). Included into groups.inc
- * after groups_sys.inc; append only.
+ * after groups_sys.inc.
  */
 
 /* ---- the accessed bit ------------------------------------------------------ */

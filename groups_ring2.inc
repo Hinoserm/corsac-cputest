@@ -3,7 +3,7 @@
  * conforming code, interrupt gates into rings 1 and 2, returns to inner
  * rings, 16-bit code in rings 1 and 3, POP of segment registers, and call
  * gates that copy parameters. Included into groups.inc after
- * groups_ring.inc; append only.
+ * groups_ring.inc.
  */
 
 /* The scratch descriptor for a ring: config, and DPL the ring's own. */

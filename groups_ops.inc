@@ -1,7 +1,6 @@
 /*
  * Groups 7-20: the instructions 86Box's recompiler still hands to the
  * interpreter, then the corners around them. Included into groups.inc.
- * The same rule holds: never reorder, only append.
  */
 
 /* An r/m operand that is memory: [ebx], EBX pointing 8 bytes into the buffer. */
@@ -720,6 +719,124 @@ dm_str(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *
     return 1;
 }
 
+/* The cases (edge order): MOVSB onto itself one byte on (a byte repeated
+   down the buffer), one byte back, DF set; MOVSW and MOVSD overlapping
+   by one or two bytes; a count of 0. */
+static void
+fix_overlap(const struct variant *v)
+{
+    static const struct {
+        int8_t  delta;
+        uint8_t count, df;
+    } cases[] = { { 1, 16, 0 }, { -1, 16, 0 }, { 1, 16, 1 }, { -1, 16, 1 }, { 2, 8, 0 }, { 3, 8, 0 }, { 1, 0, 0 } };
+    int e = edge(7);
+    if (e < 0)
+        e = rnd() % 7;
+    g_in.flags = (g_in.flags & ~0x400u) | (cases[e].df ? 0x400 : 0);
+    g_in.esi   = (uint32_t) g_buf + 24;
+    g_in.edi   = g_in.esi + cases[e].delta;
+    g_in.ecx   = cases[e].count;
+}
+
+static void
+string_overlap(const char *name)
+{
+    static const struct {
+        uint8_t len, b[3];
+    } seqs[] = { { SEQ(0xf3, 0xa4) }, { SEQ(0xf3, 0xa5) }, { SEQ(0xf3, 0x66, 0xa5) } };
+    struct variant v = { .group = name, .fix_input = fix_overlap, .norm = (1 << R_ESI) | (1 << R_EDI) };
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        run_keep(&v, 8);
+    }
+}
+
+/* Long REP runs through the sandbox, across its page boundaries: STOSD,
+   MOVSD, unaligned STOSB, MOVSB backwards, CMPSD over equal memory (it
+   runs out), SCASB for a byte that isn't there. arg2: the case. */
+static void
+fix_long(const struct variant *v)
+{
+    uint32_t s = (uint32_t) SANDBOX;
+    g_in.flags &= ~0x400u;
+    switch (v->arg2) {
+        case 0: g_in.edi = s + 0x0400; g_in.ecx = 1000; break;
+        case 1: g_in.esi = s + 0x0100; g_in.edi = s + 0x2100; g_in.ecx = 1024; break;
+        case 2: g_in.edi = s + 0x0401; g_in.ecx = 3001; break;
+        case 3: g_in.flags |= 0x400u; g_in.esi = s + 0x1f00; g_in.edi = s + 0x3f00; g_in.ecx = 2500; break;
+        case 4: g_in.esi = s + 0x0000; g_in.edi = s + 0x2400; g_in.ecx = 1000; break;
+        default: g_in.edi = s + 0x2400; g_in.ecx = 3000; g_in.eax &= ~0xffu; break;
+    }
+}
+
+static void
+string_long(const char *name)
+{
+    static const struct {
+        uint8_t len, b[2];
+    } seqs[] = { { SEQ(0xf3, 0xab) }, { SEQ(0xf3, 0xa5) }, { SEQ(0xf3, 0xaa) }, { SEQ(0xf3, 0xa4) }, { SEQ(0xf3, 0xa7) }, { SEQ(0xf2, 0xae) } };
+    struct variant v = { .group = name, .fix_input = fix_long, .norm = (1 << R_ESI) | (1 << R_EDI) };
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.arg2       = i;
+        run_keep(&v, 1);
+    }
+}
+
+/* An override moves the source (DS:ESI) but never the destination
+   (ES:EDI): with FS the 64 KB segment, MOVS, LODS and CMPS through it
+   fault and STOS and SCAS don't; with ES null, STOS and MOVS fault and
+   LODS doesn't, and an ES: override on the source faults; a REP with
+   ECX = 0 checks nothing. ES is put back in the sequence. arg2: ECX 0. */
+static void
+fix_strseg(const struct variant *v)
+{
+    g_in.esi = (uint32_t) g_buf;
+    g_in.edi = (uint32_t) g_buf + 32;
+    g_in.ecx = v->arg2 ? 0 : 4;
+    g_in.flags &= ~0x400u;
+}
+
+#define FS20 0x66, 0xb8, 0x20, 0x00, 0x8e, 0xe0 /* fs = 64 KB data */
+#define ES00 0x66, 0xb8, 0x00, 0x00, 0x8e, 0xc0 /* es = null */
+#define ES20 0x66, 0xb8, 0x20, 0x00, 0x8e, 0xc0 /* es = 64 KB data */
+#define ES10 0x6a, 0x10, 0x07                   /* push 10h; pop es */
+
+static void
+string_segs(const char *name)
+{
+    static const struct {
+        uint8_t ecx0, len, b[16];
+    } seqs[] = {
+        { 0, SEQ(FS20, 0x64, 0xa4) },             /* fs: movsb */
+        { 0, SEQ(FS20, 0x64, 0xaa) },             /* fs: stosb: ES:EDI still */
+        { 0, SEQ(FS20, 0xf3, 0x64, 0xa4) },       /* rep fs: movsb */
+        { 1, SEQ(FS20, 0xf3, 0x64, 0xa4) },       /* ECX = 0 */
+        { 0, SEQ(FS20, 0x64, 0xae) },             /* fs: scasb */
+        { 0, SEQ(FS20, 0x64, 0xa6) },             /* fs: cmpsb */
+        { 0, SEQ(FS20, 0x64, 0xac) },             /* fs: lodsb */
+        { 0, SEQ(ES00, 0xac, ES10) },             /* lodsb with ES null */
+        { 0, SEQ(ES00, 0xaa, ES10) },             /* stosb */
+        { 0, SEQ(ES00, 0xa4, ES10) },             /* movsb */
+        { 1, SEQ(ES00, 0xf3, 0xaa, ES10) },       /* rep stosb, ECX = 0 */
+        { 0, SEQ(ES00, 0x26, 0xac, ES10) },       /* es: lodsb */
+        { 0, SEQ(ES20, 0xf3, 0xaa, ES10) },       /* rep stosb past ES's limit */
+    };
+    struct variant v = { .group = name, .faults_ok = 1, .fix_input = fix_strseg,
+                         .norm = (1 << R_ESI) | (1 << R_EDI) };
+#ifdef HOSTTEST
+    return;
+#endif
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.arg2       = seqs[i].ecx0;
+        run_keep(&v, 1);
+    }
+}
+
 static void
 group_string(void)
 {
@@ -767,6 +884,9 @@ group_string(void)
             run_keep(&v, 7);
         }
     }
+    string_overlap(name);
+    string_long(name);
+    string_segs(name);
     group_end(name);
 }
 
@@ -799,6 +919,40 @@ dm_popf(const struct variant *v, const struct kin *in, struct kout *d, uint16_t 
     return 1;
 }
 
+/* IRETD at CPL 0 to the next instruction with an EFLAGS image (arg3)
+   carrying IOPL, AC, ID, RF, VIF and VIP (never VM, NT or TF), then
+   PUSHFD: which of them the model keeps. */
+static void
+emit_iretf(struct emit *e, const struct variant *v)
+{
+    e8(e, 0x68); /* push flags image */
+    e32(e, v->arg3);
+    e8(e, 0x0e); /* push cs */
+    e8(e, 0x68); /* push L */
+    uint8_t *l = e->p;
+    e32(e, 0);
+    e8(e, 0xcf); /* iretd */
+    put32_at(l, (uint32_t) e->p);
+    e8(e, 0x9c); /* L: pushfd; pop esi */
+    e8(e, 0x5e);
+}
+
+static void
+popf_iret(const char *name)
+{
+    static const uint32_t images[] = { 0x00000002, 0x00003002, 0x00040002, 0x00200002, 0x00010002,
+                                       0x00180002, 0x00043cd7, 0x003c3cd7 };
+    struct variant v = { .group = name, .faults_ok = 1, .emit = emit_iretf, .flags_mask = 0x003f3cd5,
+                         .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 0 };
+    for (unsigned i = 0; i < sizeof(images) / sizeof(images[0]); i++) {
+        v.target[0]  = 0xcf; /* for the reports */
+        put_le(v.target + 1, images[i], 4);
+        v.target_len = 5;
+        v.arg3       = images[i];
+        run_plain(&v, 1);
+    }
+}
+
 static void
 group_popf(void)
 {
@@ -829,6 +983,7 @@ group_popf(void)
         else
             run_plain(&v, 4);
     }
+    popf_iret(name);
     group_end(name);
 }
 
@@ -840,6 +995,82 @@ static void
 fix_frame(const struct variant *v)
 {
     g_in.ebp = (uint32_t) g_buf + 48;
+}
+
+/* SS on the 64 KB data segment (B = 0): pushes and pops move SP only (the
+   upper half of ESP stays as it was), into free memory at 7800h; CALL,
+   ENTER, PUSHA and PUSHFD on it; and SP wrapping at 0. ESP and SS are
+   put back after. */
+static void
+canon_stack16(const struct variant *v, const struct kin *in, struct kout *o)
+{
+    if (v->arg2 == 2) /* call: the pushed return address, relative to the code */
+        o->esi -= (uint32_t) g_cur_slot;
+}
+
+static void
+emit_stack16(struct emit *e, const struct variant *v)
+{
+    static const struct {
+        uint8_t len, b[12];
+    } body[] = {
+        { SEQ(0x50, 0x59) },                         /* push eax; pop ecx */
+        { SEQ(0x66, 0x50, 0x66, 0x5b) },             /* push ax; pop bx */
+        { SEQ(0xe8, 0x00, 0x00, 0x00, 0x00, 0x5e) }, /* call $+5; pop esi */
+        { SEQ(0xc8, 0x04, 0x00, 0x01) },             /* enter 4, 1 */
+        { SEQ(0x60, 0x61) },                         /* pushad; popad */
+        { SEQ(0x9c, 0x5e) },                         /* pushfd; pop esi */
+        { SEQ(0x6a, 0x7f, 0x8f, 0xc6) },             /* push 7Fh; pop esi */
+    };
+    int k = v->arg2;
+    e8(e, 0x89); /* mov [g_stack_save], esp */
+    e8(e, 0x25);
+    e32(e, (uint32_t) &g_stack_save);
+    e8(e, 0x66); /* mov ax, 20h; mov ss, ax */
+    e8(e, 0xb8);
+    e8(e, 0x20);
+    e8(e, 0x00);
+    e8(e, 0x8e);
+    e8(e, 0xd0);
+    e8(e, 0xbc); /* mov esp, value */
+    e32(e, v->arg3);
+    ebytes(e, body[k].b, body[k].len);
+    e8(e, 0x89); /* mov edx, esp */
+    e8(e, 0xe2);
+    e8(e, 0x66); /* mov ax, 10h; mov ss, ax; mov esp, [g_stack_save] */
+    e8(e, 0xb8);
+    e8(e, 0x10);
+    e8(e, 0x00);
+    e8(e, 0x8e);
+    e8(e, 0xd0);
+    e8(e, 0x8b);
+    e8(e, 0x25);
+    e32(e, (uint32_t) &g_stack_save);
+}
+
+static void
+stack_16(const char *name)
+{
+    static const uint32_t esps[] = { 0xabcd7810, 0x00007810, 0x12340002 };
+    struct variant v = { .group = name, .faults_ok = 1, .emit = emit_stack16, .canon = canon_stack16,
+                         .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+#ifdef HOSTTEST
+    return;
+#endif
+    for (int k = 0; k < 7; k++) {
+        for (int s = 0; s < 3; s++) {
+            if (s == 2 && k != 0)
+                continue; /* SP wrapping at 0: once */
+            v.target[0]  = 0x5a; /* for the reports */
+            v.target[1]  = k;
+            v.target[2]  = s;
+            v.target_len = 3;
+            v.arg2       = k;
+            v.arg3       = esps[s];
+            v.fx_arg     = k != 5; /* PUSHFD holds the producer's undefined flags */
+            run_plain(&v, 1);
+        }
+    }
 }
 
 static void
@@ -884,6 +1115,7 @@ group_stack(void)
         v.norm       = seqs[i].frame ? 1 << R_EBP : (seqs[i].b[0] == 0x54 ? 1 << R_ESI : 0);
         run_plain(&v, 1);
     }
+    stack_16(name);
     group_end(name);
 }
 
@@ -1207,6 +1439,44 @@ fix_xlat(const struct variant *v)
         g_in.eax = (g_in.eax & ~0xffu) | (rnd() & 31);
 }
 
+/* XLAT with an override (ES:, CS:), with a null FS (#GP), and in 16-bit
+   addressing (BX; the low buffer). */
+static void
+fix_xlat2(const struct variant *v)
+{
+    if (v->arg2) {
+#ifdef HOSTTEST
+        g_skip = 1;
+#endif
+        g_in.ebx = (rnd() & 0xffff0000u) | (uint32_t) LOWBUF;
+        g_in.eax = (g_in.eax & ~0xffu) | (rnd() & 15);
+    } else {
+        g_in.ebx = (uint32_t) g_buf;
+        g_in.eax = (g_in.eax & ~0xffu) | (rnd() & 63);
+    }
+}
+
+static void
+misc_xlat(const char *name)
+{
+    static const struct {
+        uint8_t a16, len, b[8];
+    } seqs[] = {
+        { 0, SEQ(0x26, 0xd7) },
+        { 0, SEQ(0x2e, 0xd7) },
+        { 0, SEQ(0x66, 0xb9, 0x00, 0x00, 0x8e, 0xe1, 0x64, 0xd7) }, /* fs = 0; fs: xlat */
+        { 1, SEQ(0x67, 0xd7) },
+    };
+    struct variant v    = { .group = name, .faults_ok = 1, .fix_input = fix_xlat2, .reg_fix = 1 };
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.arg2       = seqs[i].a16;
+        v.norm       = seqs[i].a16 ? 0 : 1 << R_EBX;
+        run_plain(&v, 3);
+    }
+}
+
 static void
 group_misc(void)
 {
@@ -1242,5 +1512,6 @@ group_misc(void)
         else
             run_plain(&v, 2);
     }
+    misc_xlat(name);
     group_end(name);
 }

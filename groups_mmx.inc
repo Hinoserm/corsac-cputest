@@ -1,7 +1,7 @@
 /*
  * MMX (P55C, Pentium II, K6 on), the MMX/x87 handover (EMMS, FEMMS), and
  * AMD 3DNow! and its K6-2+/K6-III+ extensions. Included into groups.inc
- * after groups_ops.inc; append only.
+ * after groups_ops.inc.
  *
  * Every variant loads MM0-MM7 from g_mmx_in after an FNINIT and stores them
  * to g_mmx_out afterwards; the stored registers go into the memory CRC.
