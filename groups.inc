@@ -520,6 +520,7 @@ static const struct group_def groups[] = {
     G(group_task_errors),
     G(group_lock_legal),
     G(group_segovr),
+    G(group_lds_forms),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

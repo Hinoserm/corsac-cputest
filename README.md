@@ -175,6 +175,7 @@ between versions until the group itself changes.
 | 276 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
 | 277 | `lock.legal` | LOCK on every lockable instruction with a memory destination, and #UD on CMP, TEST, MOV, BT, PUSH/POP, the register forms and one-byte INC |
 | 278 | `segovr` | segment overrides: CS: reads but not writes, a null FS, a 64 KB segment's limit, LODS from CS:, the last of two overrides counts |
+| 279 | `lds.forms` | LDS LES LFS LGS LSS with 32- and 16-bit offsets and a data, null, code, 64 KB and out-of-GDT selector |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

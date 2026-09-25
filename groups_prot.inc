@@ -124,3 +124,74 @@ group_segovr(void)
     }
     group_end(name);
 }
+
+/* ---- far pointer loads ----------------------------------------------------------- */
+
+/* LDS LES LFS LGS LSS from a far pointer in the buffer, 32- and 16-bit
+   offsets, with a data, null, code, 64 KB and out-of-GDT selector; what
+   was loaded is read back with MOV CX, Sreg. DS and ES are put back
+   straight after; LSS's SS:ESP too, ESP kept in EDI meanwhile (which then
+   holds the loaded offset), SS through AX. */
+static void
+group_lds_forms(void)
+{
+    static const struct {
+        uint8_t n, op[2], sreg;
+    } ops[] = {
+        { 1, { 0xc5 }, 3 },       /* lds */
+        { 1, { 0xc4 }, 0 },       /* les */
+        { 2, { 0x0f, 0xb4 }, 4 }, /* lfs */
+        { 2, { 0x0f, 0xb5 }, 5 }, /* lgs */
+        { 2, { 0x0f, 0xb2 }, 2 }, /* lss */
+    };
+    static const uint8_t sels[] = { 0x10, 0x00, 0x08, 0x20, 0x28 };
+    const char          *name   = "lds.forms";
+    struct variant       v      = { .group = name, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+#ifdef HOSTTEST
+    group_skip(name, "segment loads (host build)");
+    return;
+#endif
+    group_begin(name);
+    for (unsigned o = 0; o < sizeof(ops) / sizeof(ops[0]); o++) {
+        int sr = ops[o].sreg;
+        for (int w = 0; w < 2; w++) {
+            for (unsigned s = 0; s < sizeof(sels); s++) {
+                int      n = 0;
+                uint8_t *t = v.target;
+                t[n++]     = 0x66; /* mov word [ebx+4 or +2], sel */
+                t[n++]     = 0xc7;
+                t[n++]     = 0x43;
+                t[n++]     = w ? 2 : 4;
+                t[n++]     = sels[s];
+                t[n++]     = 0;
+                if (sr == 2) {
+                    t[n++] = 0x89; /* mov edi, esp */
+                    t[n++] = 0xe7;
+                }
+                if (w)
+                    t[n++] = 0x66;
+                memcpy(t + n, ops[o].op, ops[o].n);
+                n += ops[o].n;
+                t[n++] = 0x33; /* esi, [ebx] */
+                t[n++] = 0x66; /* mov cx, sreg */
+                t[n++] = 0x8c;
+                t[n++] = 0xc1 | (sr << 3);
+                if (sr == 2) {
+                    t[n++] = 0x87; /* xchg edi, esp */
+                    t[n++] = 0xe7;
+                }
+                if (sr != 4 && sr != 5) {
+                    t[n++] = 0x66; /* mov ax, 10h; mov sreg, ax */
+                    t[n++] = 0xb8;
+                    t[n++] = 0x10;
+                    t[n++] = 0x00;
+                    t[n++] = 0x8e;
+                    t[n++] = 0xc0 | (sr << 3);
+                }
+                v.target_len = n;
+                run_plain(&v, 1);
+            }
+        }
+    }
+    group_end(name);
+}
