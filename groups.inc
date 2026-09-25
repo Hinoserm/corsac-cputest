@@ -540,6 +540,7 @@ static const struct group_def groups[] = {
     G(group_rdpmc_pce),
     G(group_pg_rmw),
     G(group_pg_pde),
+    G(group_pg_global),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

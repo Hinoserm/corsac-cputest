@@ -332,3 +332,74 @@ group_pg_pde(void)
     }
     pg_run_seqs("pg.pde", seqs, sizeof(seqs) / sizeof(seqs[0]), CR0_WP);
 }
+
+/* ---- global pages ------------------------------------------------------------------------------ */
+
+/* The alias page read, its PTE pointed at the next page, CR3 reloaded,
+   read again (ECX: a global entry survives the reload, with CR4.PGE; raw
+   only), then INVLPG and a third read (ESI: the new page). Variants: PGE
+   and G, PGE without G, G without PGE (arg2 bit 0: PGE). PGE is toggled
+   off and on before each run, which flushes the global entries too. */
+static void
+pgg_before(const struct variant *v)
+{
+#ifndef HOSTTEST
+    cr4_set(CR4_PGE, 0);
+    pg_setup(v);
+    if (v->arg2)
+        cr4_set(CR4_PGE, 1);
+#endif
+}
+
+static void
+pgg_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    cr4_set(CR4_PGE, 0);
+    pg_reset(v);
+#endif
+}
+
+static void
+group_pg_global(void)
+{
+    static const struct {
+        uint8_t pge, g;
+    } cases[] = { { 1, 1 }, { 1, 0 }, { 0, 1 } };
+    const char    *name = "pg.global";
+    struct variant v    = { .group = name, .paging = 1, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF,
+                            .fx = FX_CUSTOM, .defmask = dm_tlb, .before_run = pgg_before, .after_run = pgg_after };
+    if (!(g_cpu.features & CPUID_PGE)) {
+        group_skip(name, "no PGE");
+        return;
+    }
+    if (!pg_begin(name, 0))
+        return;
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint8_t *t = v.target;
+        int      n = 0;
+        static const uint8_t rd[] = { 0xa1, ALIAS };
+        memcpy(t + n, rd, sizeof(rd));
+        n += sizeof(rd);
+        t[n++] = 0xc7; /* mov dword [alias PTE], the next page */
+        t[n++] = 0x05;
+        put_le(t + n, PG_ALIAS, 4);
+        n += 4;
+        put_le(t + n, ((uint32_t) SANDBOX + 0x3000) | PTE_P | PTE_W | (cases[i].g ? 0x100 : 0), 4);
+        n += 4;
+        static const uint8_t rest[] = {
+            0x0f, 0x20, 0xda,             /* mov edx, cr3 */
+            0x0f, 0x22, 0xda,             /* mov cr3, edx */
+            0x8b, 0x0d, ALIAS,            /* mov ecx, [alias] */
+            0x0f, 0x01, 0x3d, ALIAS,      /* invlpg [alias] */
+            0x8b, 0x35, ALIAS,            /* mov esi, [alias] */
+        };
+        memcpy(t + n, rest, sizeof(rest));
+        n += sizeof(rest);
+        v.target_len = n;
+        v.arg2       = cases[i].pge;
+        v.arg3       = 128 | (cases[i].g ? 4096 : 0);
+        run_plain(&v, 1);
+    }
+    pg_end(name);
+}

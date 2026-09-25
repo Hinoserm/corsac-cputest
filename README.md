@@ -194,6 +194,7 @@ between versions until the group itself changes.
 | 295 | `rdpmc.pce` | RDPMC of counters 0-2 at CPL 0, and at CPL 1-3 with and without CR4.PCE (Pentium MMX, Pentium Pro) |
 | 296 | `pg.rmw` | CMPXCHG, CMPXCHG8B, XADD and locked BTS/ADD on a read-only page (WP), compare equal and not; the dirty bit after a failed compare |
 | 297 | `pg.pde` | the alias page through a read-only or not-present PDE (WP): reads, writes, CR2, and the PDE's and PTE's A and D bits |
+| 298 | `pg.global` | CR4.PGE: a global page's translation survives a CR3 reload and INVLPG removes it; without G or without PGE it doesn't |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
