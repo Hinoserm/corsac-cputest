@@ -80,6 +80,7 @@ so their CRCs stay comparable across versions. New groups only go at the end.
 | 24 | `cmov`        | CMOVcc, all conditions, 16/32-bit, register and memory, after every producer (P6 on) |
 | 25 | `rdtsc`       | two RDTSCs back to back: the difference is positive and small (Pentium on) |
 | 26 | `nop.p6`      | multi-byte NOP and the reserved NOPs 0F 19-1E: NOPs on P6, #UD before; its CRCs differ by family on purpose |
+| 27 | `smc`         | self-modifying code: patched immediates and opcodes, and a loop that repatches its own block; without a jump only in `crc_raw` (a 486 may run stale prefetched bytes) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -170,7 +171,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups.inc` | the first six groups, and the group table                   |
 | `groups_ops.inc` | groups 7-20                                               |
 | `groups_mmx.inc` | groups 21-23: MMX and 3DNow!                              |
-| `groups_p6.inc` | groups 24 on: Pentium Pro and later                        |
+| `groups_p6.inc` | groups 24-26: Pentium Pro and later                        |
+| `groups_more.inc` | groups 27 on                                             |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |
