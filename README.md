@@ -156,6 +156,7 @@ between versions until the group itself changes.
 | 257 | `tf.rep` | REP MOVS/STOS/CMPS/SCAS/LODS under TF: one iteration per trap, counts 5, 1 and 0 |
 | 258 | `dr.exec` | instruction breakpoints in each of DR0-DR3, on a prefixed instruction's first byte and past the prefix; globally enabled, not enabled |
 | 259 | `dr.data` | data breakpoints for writes and for reads/writes, 1, 2 and 4 bytes, hit, straddled and missed by a byte |
+| 260 | `dr.gd` | DR7.GD: the next MOV to or from a debug register faults with DR6.BD |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
