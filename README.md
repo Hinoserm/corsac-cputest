@@ -141,6 +141,7 @@ between versions until the group itself changes.
 | 242 | `r3.limits` | FS on read/write, read-only, expand-down (32 and 16-bit), execute/read and execute-only code, page-granular, DPL-1 and missing descriptors at CPL 3, accessed either side of the limit |
 | 243 | `r2.limits` | the same at CPL 2 |
 | 244 | `r1.limits` | the same at CPL 1 |
+| 245 | `r3.ss` | SS on those descriptors at CPL 3, a push and pop either side of the limit: #SS, #GP, expand-down and 16-bit stacks |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
