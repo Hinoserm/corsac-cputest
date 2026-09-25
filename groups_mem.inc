@@ -402,3 +402,94 @@ group_jcc_loop(void)
     }
     group_end(name);
 }
+
+/* ---- MOV forms --------------------------------------------------------------- */
+
+/* A base register (arg2) pointing at the buffer, an index (ECX) small,
+   for MOVs through every kind of address. */
+static void
+fix_movmem(const struct variant *v)
+{
+    g_in.ecx         = rnd() & 7; /* first: ECX may be the base */
+    *in_reg(v->arg2) = (uint32_t) g_buf + MEM_OFF;
+}
+
+static void
+group_mov_forms(void)
+{
+    const char    *name = "mov.forms";
+    struct variant v    = { .group = name, .fix_input = fix_movmem, .arg2 = R_EBX, .norm = 1 << R_EBX };
+    group_begin(name);
+
+    /* moffs: A0 A1 A2 A3, at 8, 16 and 32 bits (the address in the code) */
+    for (int op = 0xa0; op <= 0xa3; op++) {
+        for (int size = 8; size <= 32; size *= 2) {
+            if (size == 8 && (op & 1))
+                continue;
+            if (size != 8 && !(op & 1))
+                continue;
+            int n = 0;
+            if (size == 16)
+                v.target[n++] = 0x66;
+            v.target[n++] = op;
+            put_le(v.target + n, (uint32_t) g_buf + MEM_OFF + 4, 4);
+            n += 4;
+            v.target_len = n;
+            v.no_ref     = 0;
+            run_plain(&v, 2);
+        }
+    }
+    /* C6/C7 r/m, imm through [reg+disp32] with each base (ModRM 80-83,
+       which 86Box's recompiler sends to the interpreter on purpose), and
+       the other displacement forms. */
+    for (int base = 0; base < 4; base++) {
+        for (int size = 8; size <= 32; size *= 2) {
+            int n = 0;
+            if (size == 16)
+                v.target[n++] = 0x66;
+            v.target[n++] = size == 8 ? 0xc6 : 0xc7;
+            v.target[n++] = 0x80 | base;
+            put_le(v.target + n, 16, 4);
+            n += 4;
+            put_le(v.target + n, 0x8badf00d, size / 8);
+            n += size / 8;
+            v.target_len = n;
+            v.arg2       = base;
+            v.norm       = 1 << base;
+            run_plain(&v, 1);
+        }
+    }
+    v.arg2 = R_EBX;
+    v.norm = 1 << R_EBX;
+    {
+        static const struct {
+            uint8_t len, b[8];
+        } seqs[] = {
+            { SEQ(0xc6, 0x43, 0x1f, 0x5a) },             /* mov byte [ebx+31], 5Ah */
+            { SEQ(0xc7, 0x43, 0x1d, 0x78, 0x56, 0x34, 0x12) }, /* mov dword [ebx+29], imm: misaligned */
+            { SEQ(0x66, 0xc7, 0x03, 0x34, 0x12) },       /* mov word [ebx], imm */
+            { SEQ(0x88, 0x3b) },                         /* mov [ebx], bh */
+            { SEQ(0x88, 0x63, 0x01) },                   /* mov [ebx+1], ah */
+            { SEQ(0x8a, 0x23) },                         /* mov ah, [ebx] */
+            { SEQ(0x8a, 0x7b, 0x03) },                   /* mov bh, [ebx+3] (the base's own high byte) */
+            { SEQ(0x89, 0x04, 0x8b) },                   /* mov [ebx+ecx*4], eax */
+            { SEQ(0x8b, 0x74, 0x4b, 0xfc) },             /* mov esi, [ebx+ecx*2-4] */
+            { SEQ(0x66, 0x8b, 0x14, 0x0b) },             /* mov dx, [ebx+ecx] */
+            { SEQ(0x8b, 0x1b) },                         /* mov ebx, [ebx]: the base overwritten */
+            { SEQ(0x64, 0x8b, 0x43, 0x04) },             /* mov eax, fs:[ebx+4] */
+            { SEQ(0x8b, 0x83, 0x10, 0x00, 0x00, 0x00) }, /* mov eax, [ebx+16] with disp32 */
+            { SEQ(0x98) },                               /* cwde */
+            { SEQ(0x66, 0x98) },                         /* cbw */
+            { SEQ(0x99) },                               /* cdq */
+            { SEQ(0x66, 0x99) },                         /* cwd */
+        };
+        for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+            memcpy(v.target, seqs[i].b, seqs[i].len);
+            v.target_len = seqs[i].len;
+            /* mov ebx, [ebx] leaves random data in EBX, not an address */
+            v.norm = seqs[i].b[0] == 0x8b && seqs[i].b[1] == 0x1b ? 0 : 1 << R_EBX;
+            run_plain(&v, 2);
+        }
+    }
+    group_end(name);
+}
