@@ -107,6 +107,7 @@ ring_run(const char *name, const struct ring_seq *seqs, unsigned n, uint32_t cr4
         v.arg2       = seqs[i].fix;
         v.fx_arg     = seqs[i].defined;
         v.norm       = seqs[i].fix == RF_MEM ? 1 << R_EBX : seqs[i].fix == RF_PORT ? 1 << R_ESI : 0;
+        v.canon      = seqs[i].ring == 4 && seqs[i].b[0] == 0x8c && seqs[i].b[1] == 0xc8 ? canon_v86_cs : 0;
         run_plain(&v, 1);
     }
     ring_end(name, cr4, cr0);
@@ -611,6 +612,14 @@ group_r2_gates(void)
 
 /* ---- virtual-8086 mode ------------------------------------------------------ */
 
+/* MOV AX, CS in V86 gives the segment the test's code happens to be in,
+   which moves from pass to pass: made relative to that segment. */
+static void
+canon_v86_cs(const struct variant *v, const struct kin *in, struct kout *o)
+{
+    o->eax = (o->eax & 0xffff0000u) | ((o->eax - ((uint32_t) g_cur_low >> 4)) & 0xffff);
+}
+
 /* Real-mode work in V86 at IOPL 3: 16-bit arithmetic, segment arithmetic
    (DS = 900h reaches the low buffer), the stack, PUSHF, CLI; and what
    stays privileged. */
@@ -626,7 +635,7 @@ group_v86_basic(void)
         { 4, 3, 0, 0, RF_NONE, 1, SEQ(0x9c, 0x5e) },                         /* pushf; pop si */
         { 4, 3, 0, 0, RF_NONE, 1, SEQ(0x66, 0x9c, 0x66, 0x5e) },             /* pushfd; pop esi */
         { 4, 3, 0, 0, RF_NONE, 1, SEQ(0xfa, 0x9c, 0x5e) },                   /* cli */
-        { 4, 3, 0, 0, RF_NONE, 0, SEQ(0x8c, 0xc8) },                         /* mov ax, cs: per slot, raw */
+        { 4, 3, 0, 0, RF_NONE, 1, SEQ(0x8c, 0xc8) },                         /* mov ax, cs: relative, see canon_v86_cs */
         { 4, 3, 0, 0, RF_NONE, 1, SEQ(0xcd, 0x32) },                         /* INT through a DPL-1 gate: #GP */
         { 4, 3, 0, 0, RF_NONE, 1, SEQ(0xf4) },                               /* hlt: #GP */
         { 4, 3, 0, 0, RF_NONE, 1, SEQ(0x0f, 0x20, 0xc0) },                   /* mov eax, cr0: #GP */
