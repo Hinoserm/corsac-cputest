@@ -462,3 +462,357 @@ group_apic_irq(void)
     group_end(name);
 #endif
 }
+
+/* ---- the other processors ------------------------------------------------------ */
+
+/* Started by INIT and STARTUP IPIs into rt.asm's ap_tramp, each takes a
+   ticket (1 up; the BSP is 0) and runs ap_main on its own stack with its
+   own IDT: an exception there stops that processor and is reported, never
+   reaching the harness's handlers. Then it waits in a mailbox loop, with
+   interrupts on, for the BSP's commands; it touches nothing of the
+   harness's but its own slot and the counters a command names. Only the
+   BSP prints, times, or touches the harness. */
+#define AP_MAX    15
+#define AP_TRAMP  0x3000u
+#define T_DATA    0x800u
+#define T_GDTR    (AP_TRAMP + T_DATA + 0)
+#define T_TICKET  (AP_TRAMP + T_DATA + 8)
+#define T_ARRIVED (AP_TRAMP + T_DATA + 12)
+#define T_SLOTS   (AP_TRAMP + T_DATA + 16)
+
+enum { AP_CMD_NONE, AP_CMD_PING, AP_CMD_LOCKS, AP_CMD_LDR };
+
+struct percpu {
+    volatile uint32_t cmd_seq, ack_seq, cmd, arg, state, apic_id, sig, result;
+} __attribute__((aligned(64)));
+
+struct percpu     g_pc[AP_MAX + 1];
+uint32_t          g_ap_fault[(AP_MAX + 1) * 2]; /* by ticket: EIP or error code, and a flag */
+static uint32_t   g_ap_cr0 RING_UNUSED; /* the BSP's CR0, which the APs take */
+static int        g_ap_started RING_UNUSED, g_ap_count RING_UNUSED, g_ap_expected RING_UNUSED;
+static uint32_t   g_ap_entry[AP_MAX + 1][3] RING_UNUSED; /* EDX, CR0, EFLAGS as each arrived */
+
+#ifndef HOSTTEST
+extern uint8_t    ap_tramp[], ap_tramp_end[], ap_fault_stub[];
+extern volatile uint32_t g_irq_by_id[16 * 256];
+
+static struct idt_entry g_idt_ap[256] __attribute__((aligned(8)));
+
+/* Counters the lock test shares, each on a line of its own; c4 straddles
+   two 64-byte lines. */
+static volatile uint32_t g_lk[64] __attribute__((aligned(64)));
+#define LK_INC   (g_lk + 0)
+#define LK_XADD  (g_lk + 16)
+#define LK_CAS   (g_lk + 32)
+#define LK_SPIN  (g_lk + 48)
+#define LK_PLAIN (g_lk + 50)
+#define LK_SPLIT ((volatile uint32_t *) ((uint8_t *) (g_lk + 16) - 2)) /* across the line at +64 */
+
+static void
+ap_locks(uint32_t n)
+{
+    for (uint32_t i = 0; i < n; i++) {
+        __asm__ volatile("lock incl %0" : "+m"(*LK_INC));
+        uint32_t one = 1;
+        __asm__ volatile("lock xaddl %0, %1" : "+r"(one), "+m"(LK_XADD[1]));
+        uint32_t old = *LK_CAS, want;
+        do {
+            want = old + 1;
+            __asm__ volatile("lock cmpxchgl %2, %1" : "+a"(old), "+m"(*LK_CAS) : "r"(want) : "cc");
+        } while (old != want - 1);
+        uint32_t lock = 1;
+        do
+            __asm__ volatile("xchgl %0, %1" : "+r"(lock), "+m"(*LK_SPIN) : : "memory");
+        while (lock);
+        LK_PLAIN[0] = LK_PLAIN[0] + 1; /* only under the spinlock */
+        __asm__ volatile("movl $0, %0" : "=m"(*LK_SPIN) : : "memory");
+        __asm__ volatile("lock addl $1, %0" : "+m"(*LK_SPLIT));
+    }
+}
+
+void ap_main(uint32_t ticket);
+void
+ap_main(uint32_t ticket)
+{
+    struct percpu *pc = &g_pc[ticket];
+    struct dtr     d  = { sizeof(g_idt_ap) - 1, (uint32_t) g_idt_ap };
+    uint32_t       a, b, c, dx;
+    __asm__ volatile("lidt %0" : : "m"(d));
+    __asm__ volatile("wbinvd\n\tmov %0, %%cr0\n\tfninit" : : "r"(g_ap_cr0) : "memory");
+    cpuid(1, &a, &b, &c, &dx);
+    pc->sig     = a;
+    pc->apic_id = lapic_rd(LAPIC_ID) >> 24;
+    lapic_wr(LAPIC_SVR, 0x1ff);
+    lapic_wr(LAPIC_TPR, 0);
+    pc->state = 1;
+    __asm__ volatile("sti");
+    for (;;) {
+        while (pc->cmd_seq == pc->ack_seq)
+            __asm__ volatile("pause" : : : "memory");
+        switch (pc->cmd) {
+            case AP_CMD_PING: pc->result++; break;
+            case AP_CMD_LOCKS: ap_locks(pc->arg); break;
+            case AP_CMD_LDR: /* logical flat: DFR all ones, LDR = arg */
+                lapic_wr(LAPIC_DFR, 0xffffffffu);
+                lapic_wr(LAPIC_LDR, pc->arg);
+                pc->result = lapic_rd(LAPIC_LDR);
+                break;
+            default: break;
+        }
+        pc->ack_seq = pc->cmd_seq;
+    }
+}
+
+/* Give AP t a command and wait up to 2 s for it to be done. */
+static int
+ap_do(int t, uint32_t cmd, uint32_t arg)
+{
+    struct percpu *pc = &g_pc[t];
+    pc->cmd           = cmd;
+    pc->arg           = arg;
+    pc->cmd_seq       = pc->ack_seq + 1;
+    for (int ms = 0; ms < 2000; ms++) {
+        if (pc->ack_seq == pc->cmd_seq)
+            return 1;
+        delay_us(1000);
+    }
+    return 0;
+}
+
+/* One IPI; 0 if the ICR never goes idle (1 ms). */
+static int
+ipi(uint32_t dest, uint32_t icrlo)
+{
+    lapic_wr(LAPIC_ICRHI, dest << 24);
+    lapic_wr(LAPIC_ICRLO, icrlo);
+    for (int spin = 0; spin < 1000; spin++) {
+        if (!(lapic_rd(LAPIC_ICRLO) & 0x1000))
+            return 1;
+        delay_us(1);
+    }
+    return 0;
+}
+
+/* Start every processor the tables list as enabled and not this one: INIT
+   (level assert, then de-assert), two STARTUPs at AP_TRAMP (the second is
+   ignored by one that started), each within the MP spec's delays; then up
+   to 200 ms for it to arrive and 200 ms more to report ready. An 82489DX
+   (APIC version below 10h) takes no STARTUP: not started, reported. */
+static void
+ap_start_all(void)
+{
+    uint32_t own = lapic_rd(LAPIC_ID) >> 24, gdtr[2];
+    for (int i = 0; i < 256; i++) {
+        uint32_t a = i >= 32 ? irq_table[i] : i == 2 ? irq_table[2] : (uint32_t) ap_fault_stub;
+        g_idt_ap[i].off_lo = a & 0xffff;
+        g_idt_ap[i].off_hi = a >> 16;
+        g_idt_ap[i].sel    = 0x08;
+        g_idt_ap[i].zero   = 0;
+        g_idt_ap[i].type   = 0x8e;
+    }
+    __asm__ volatile("mov %%cr0, %0" : "=r"(g_ap_cr0));
+    memcpy((void *) AP_TRAMP, ap_tramp, ap_tramp_end - ap_tramp);
+    __asm__ volatile("sgdt %0" : "=m"(*(uint8_t (*)[6]) gdtr));
+    memcpy((void *) T_GDTR, gdtr, 6);
+    *(volatile uint32_t *) T_TICKET  = 1;
+    *(volatile uint32_t *) T_ARRIVED = 0;
+    for (unsigned i = 0; i < g_mp.n_cpus && g_ap_count < AP_MAX; i++) {
+        const struct mp_cpu *c = &g_mp.cpu[i];
+        if (!(c->flags & 1) || c->apic_id == own)
+            continue;
+        g_ap_expected++;
+        if (c->apic_ver && c->apic_ver < 0x10)
+            continue; /* an 82489DX: not started this way */
+        uint32_t before = *(volatile uint32_t *) T_ARRIVED;
+        lapic_esr();
+        ipi(c->apic_id, 0x0000c500); /* INIT, level, assert */
+        delay_us(10000);
+        ipi(c->apic_id, 0x00008500); /* INIT, level, de-assert */
+        delay_us(10000);
+        for (int k = 0; k < 2; k++) {
+            ipi(c->apic_id, 0x00000600 | (AP_TRAMP >> 12)); /* STARTUP */
+            delay_us(200);
+        }
+        for (int ms = 0; ms < 200 && *(volatile uint32_t *) T_ARRIVED == before; ms++)
+            delay_us(1000);
+        if (*(volatile uint32_t *) T_ARRIVED == before)
+            continue;
+        int t = g_ap_count + 1;
+        for (int ms = 0; ms < 200 && !g_pc[t].state && !g_ap_fault[t * 2 + 1]; ms++)
+            delay_us(1000);
+        if (g_pc[t].state) {
+            memcpy(g_ap_entry[t], (const void *) (T_SLOTS + 16 * t), 12);
+            g_ap_count++;
+        }
+    }
+}
+#endif
+
+/* Starting the other processors (once, on the first pass; the result is
+   kept): how many the tables list besides this one, how many started and
+   reported, whether each came in with its own signature in EDX and the
+   CR0 INIT leaves, and its APIC ID the table's. The machine's answer (how
+   many processors), so no reference; the entry facts are compared among
+   the processors in the result (1 = all the same as the first). */
+static void
+group_smp_start(void)
+{
+    const char *name = "smp.start";
+#ifdef HOSTTEST
+    group_skip(name, "processors (host build)");
+#else
+    struct variant v = { .group = name, .no_ref = 1 };
+    if (!lapic_find() || !mp_usable()) {
+        group_skip(name, "no local APIC or no MP/ACPI table");
+        return;
+    }
+    group_begin(name);
+    uint32_t f[5] = { 0 };
+    if (!g_counting) {
+        if (!g_ap_started) {
+            g_ap_started = 1;
+            ap_start_all();
+            for (int t = 1; t <= g_ap_count; t++) {
+                puts_("SMP cpu ticket=");
+                putdec(t);
+                puts_(" apic=");
+                puthex(g_pc[t].apic_id, 2);
+                puts_(" sig=");
+                puthex(g_pc[t].sig, 8);
+                puts_(" entry edx=");
+                puthex(g_ap_entry[t][0], 8);
+                puts_(" cr0=");
+                puthex(g_ap_entry[t][1], 8);
+                puts_(" eflags=");
+                puthex(g_ap_entry[t][2], 8);
+                putch('\n');
+            }
+        }
+        f[0]     = g_ap_expected;
+        f[1]     = g_ap_count;
+        f[2]     = 1;
+        f[3]     = 1;
+        for (int t = 1; t <= g_ap_count; t++) {
+            if (g_ap_entry[t][0] != g_ap_entry[1][0] || g_ap_entry[t][1] != g_ap_entry[1][1])
+                f[2] = 0;
+            if ((g_ap_entry[t][0] & 0xfff) != (g_pc[t].sig & 0xfff))
+                f[3] = 0;
+        }
+        f[4] = g_ap_count ? g_ap_entry[1][1] : 0;
+    }
+    run_facts(&v, f);
+    group_end(name);
+#endif
+}
+
+/* IPIs from the BSP to each started processor (physical, fixed vector
+   50h; then NMI) and to all but itself (51h); logical flat, each AP its
+   own LDR bit, all of them in one IPI (52h). EAX: every physical IPI
+   taken exactly once; ECX: the NMIs; EDX: the broadcast (each AP once,
+   the BSP not); ESI: the logical one; EDI: every AP answered. */
+static void
+group_smp_ipi(void)
+{
+    const char *name = "smp.ipi";
+#ifdef HOSTTEST
+    group_skip(name, "processors (host build)");
+#else
+    struct variant v = { .group = name, .no_ref = 1 };
+    if (!g_ap_count && !g_counting) {
+        group_skip(name, "no other processor started");
+        return;
+    }
+    if (!lapic_find()) {
+        group_skip(name, "no local APIC");
+        return;
+    }
+    group_begin(name);
+    uint32_t f[5] = { 0 };
+    if (!g_counting) {
+        uint32_t own = lapic_rd(LAPIC_ID) >> 24, mask = 0;
+        f[0] = f[1] = f[2] = f[3] = f[4] = 1;
+        for (int t = 1; t <= g_ap_count; t++) {
+            uint32_t id = g_pc[t].apic_id & 15;
+            g_irq_by_id[id * 256 + 0x50] = g_irq_by_id[id * 256 + 2] = 0;
+            g_irq_by_id[id * 256 + 0x51] = g_irq_by_id[id * 256 + 0x52] = 0;
+        }
+        g_irq_by_id[(own & 15) * 256 + 0x51] = 0;
+        for (int t = 1; t <= g_ap_count; t++) {
+            uint32_t id = g_pc[t].apic_id;
+            ipi(id, 0x00004050); /* fixed, physical, vector 50h */
+            ipi(id, 0x00004400); /* NMI */
+        }
+        ipi(0, 0x000c4051); /* all excluding self, vector 51h */
+        for (int t = 1; t <= g_ap_count; t++) {
+            f[4] &= ap_do(t, AP_CMD_LDR, 1u << (24 + t));
+            mask |= 1u << t;
+        }
+        uint32_t ldr = lapic_rd(LAPIC_LDR); /* the BSP out of it: nothing it can't take */
+        lapic_wr(LAPIC_LDR, 0);
+        ipi(mask, 0x00004852); /* fixed, logical, vector 52h */
+        delay_us(10000);
+        lapic_wr(LAPIC_LDR, ldr);
+        for (int t = 1; t <= g_ap_count; t++) {
+            uint32_t id = g_pc[t].apic_id & 15;
+            f[0] &= g_irq_by_id[id * 256 + 0x50] == 1;
+            f[1] &= g_irq_by_id[id * 256 + 2] == 1;
+            f[2] &= g_irq_by_id[id * 256 + 0x51] == 1;
+            f[3] &= g_irq_by_id[id * 256 + 0x52] == 1;
+            f[4] &= ap_do(t, AP_CMD_PING, 0);
+        }
+        f[2] &= g_irq_by_id[(own & 15) * 256 + 0x51] == 0;
+        for (int t = 1; t <= g_ap_count; t++) /* back to what INIT left */
+            ap_do(t, AP_CMD_LDR, 0);
+    }
+    run_facts(&v, f);
+    group_end(name);
+#endif
+}
+
+/* Every processor at once, 100000 times each: LOCK INC, LOCK XADD, a LOCK
+   CMPXCHG loop, a plain increment under an XCHG spinlock, and LOCK ADD on
+   a dword straddling two cache lines. Each total must be exact (EAX-EDI
+   hold 1 for each that is; the fifth, EDI, the split one). The BSP runs
+   its share while the others run theirs. */
+static void
+group_smp_lock(void)
+{
+    const char *name = "smp.lock";
+#ifdef HOSTTEST
+    group_skip(name, "processors (host build)");
+#else
+    struct variant v = { .group = name, .no_ref = 1 };
+    if (!g_ap_count && !g_counting) {
+        group_skip(name, "no other processor started");
+        return;
+    }
+    group_begin(name);
+    uint32_t f[5] = { 0 };
+    if (!g_counting) {
+        const uint32_t n = 100000;
+        for (int i = 0; i < 64; i++)
+            g_lk[i] = 0;
+        for (int t = 1; t <= g_ap_count; t++) { /* all start before any is waited for */
+            g_pc[t].cmd     = AP_CMD_LOCKS;
+            g_pc[t].arg     = n;
+            g_pc[t].cmd_seq = g_pc[t].ack_seq + 1;
+        }
+        ap_locks(n);
+        int done = 1;
+        for (int t = 1; t <= g_ap_count; t++) {
+            int ms = 0;
+            while (g_pc[t].ack_seq != g_pc[t].cmd_seq && ms++ < 20000)
+                delay_us(1000);
+            done &= g_pc[t].ack_seq == g_pc[t].cmd_seq;
+        }
+        uint32_t total = n * (g_ap_count + 1);
+        f[0] = done && *LK_INC == total;
+        f[1] = done && LK_XADD[1] == total;
+        f[2] = done && *LK_CAS == total;
+        f[3] = done && LK_PLAIN[0] == total;
+        f[4] = done && *LK_SPLIT == total;
+    }
+    run_facts(&v, f);
+    group_end(name);
+#endif
+}

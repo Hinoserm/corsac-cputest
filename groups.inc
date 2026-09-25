@@ -575,6 +575,9 @@ static const struct group_def groups[] = {
     G(group_mp_table),
     G(group_apic_regs),
     G(group_apic_irq),
+    G(group_smp_start),
+    G(group_smp_ipi),
+    G(group_smp_lock),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

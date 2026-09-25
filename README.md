@@ -194,6 +194,9 @@ goes into the group that already covers it, not into a group of its own.
 | 278 | `mp.table` | the processors and I/O APICs the BIOS lists: MP floating pointer and configuration table (1.1/1.4), an MP default configuration, or the ACPI MADT; status (bad checksum, length, entry, extended checksum...), counts, spec revision, IMCR. The board's answer: no reference, never a stop; a bad table only turns off what needs it |
 | 279 | `apic.regs` | the boot processor's local APIC, registers only: version, TPR/LDR/DFR/SVR/divider/LVT write masks, software disable forcing and holding the LVT masks, the timer counting down and stopping at 0, the error register after an illegal self-IPI vector (read the P5 or P6 way); the BIOS's settings put back |
 | 280 | `apic.irq` | interrupts through the boot processor's local APIC, with the APIC groups' IDT: self-IPIs taken at once and in priority order, TPR holding a vector pending (PPR), the timer one-shot and periodic, HLT woken by it, the STI shadow, NMI to its own ID and through port 70h's NMI-disable bit |
+| 281 | `smp.start` | starting every other processor the tables list (INIT, INIT de-assert, two STARTUPs, the MP spec's delays, every wait bounded): how many listed and started, each arrival's EDX (its signature) and CR0; each then waits in a mailbox loop with its own IDT (a fault there stops only it). Machine facts: no reference |
+| 282 | `smp.ipi` | IPIs from the boot processor: physical fixed and NMI to each other processor, all-but-self, logical flat to all of them in one; each taken exactly once, the sender excluded |
+| 283 | `smp.lock` | every processor at once, 100000 times each: LOCK INC, LOCK XADD, a LOCK CMPXCHG loop, a plain increment under an XCHG spinlock, LOCK ADD across two cache lines; each total exact |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

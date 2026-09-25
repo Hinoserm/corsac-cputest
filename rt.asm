@@ -20,6 +20,12 @@ global  g_irq_log
 global  g_irq_nlog
 global  g_irq_eip
 global  g_irq_eoi
+global  g_irq_by_id
+global  ap_tramp
+global  ap_tramp_end
+global  ap_fault_stub
+extern  ap_main
+extern  g_ap_fault
 extern  g_lapic
 extern  harness_fault
 
@@ -192,6 +198,13 @@ irq_common:
         pushad
         mov     eax, [esp + 32]         ; the vector
         inc     dword [g_irq_hits + eax * 4]
+        mov     ecx, [g_lapic]                  ; and by APIC ID, for the SMP groups
+        mov     ecx, [ecx + 0x20]
+        shr     ecx, 24
+        and     ecx, 15
+        shl     ecx, 8
+        add     ecx, eax
+        lock inc dword [g_irq_by_id + ecx * 4]
         mov     ecx, [g_irq_nlog]
         cmp     ecx, 16
         jae     .logged
@@ -213,6 +226,81 @@ irq_common:
         popad
         add     esp, 4
         iretd
+
+; ---- the other processors -------------------------------------------------
+;
+; ap_tramp is copied to AP_TRAMP (a 4 KB page below 1 MB) and started there
+; by STARTUP IPIs, vector AP_TRAMP >> 12, in real mode at CS=0300h, IP=0.
+; Each arriving processor takes a ticket (LOCK XADD, so simultaneous
+; arrivals get different ones), records its entry EDX (the processor
+; signature after RESET/INIT), CR0 and EFLAGS in its slot, counts itself
+; in, and goes to protected mode with the harness's GDT (the GDTR is filled
+; in by the BSP, at T_GDTR) and on to ap_entry32 on a 16 KB stack of its
+; own: AP_STACKS + (ticket + 1) * 4000h.
+AP_TRAMP        equ 0x3000
+AP_STACKS       equ 0x280000
+T_DATA          equ 0x800                       ; the page's data half
+T_GDTR          equ T_DATA + 0                  ; 6 bytes, filled by the BSP
+T_TICKET        equ T_DATA + 8
+T_ARRIVED       equ T_DATA + 12
+T_SLOTS         equ T_DATA + 16                 ; 16 bytes each: EDX, CR0, EFLAGS, ticket
+
+bits 16
+ap_tramp:
+        cli
+        mov     ax, cs
+        mov     ds, ax
+        mov     ebx, edx
+        mov     ecx, cr0
+        mov     edi, 1
+        lock xadd [T_TICKET], edi
+        mov     si, di
+        shl     si, 4
+        add     si, T_SLOTS
+        mov     [si], ebx
+        mov     [si + 4], ecx
+        pushfd
+        pop     dword [si + 8]
+        mov     [si + 12], edi
+        lock inc dword [T_ARRIVED]
+        o32 lgdt [T_GDTR]
+        mov     eax, cr0
+        or      al, 1
+        mov     cr0, eax
+        jmp     dword 0x08:ap_entry32
+ap_tramp_end:
+
+bits 32
+ap_entry32:
+        mov     ax, 0x10
+        mov     ds, ax
+        mov     es, ax
+        mov     fs, ax
+        mov     gs, ax
+        mov     ss, ax
+        mov     esp, edi
+        inc     esp
+        shl     esp, 14
+        add     esp, AP_STACKS
+        push    edi                             ; the ticket
+        call    ap_main
+.halt:  cli
+        hlt
+        jmp     .halt
+
+; An exception on another processor: its vector and EIP into g_ap_fault
+; (by ticket, from ESP), then that processor stops. It never reaches the
+; harness's own handlers, which belong to the BSP.
+ap_fault_stub:
+        mov     eax, esp
+        sub     eax, AP_STACKS
+        shr     eax, 14                         ; the ticket (ESP is inside its stack)
+        mov     ecx, [esp]                      ; EIP, or the error code for 8 and 10-14, 17
+        mov     [g_ap_fault + eax * 8], ecx
+        mov     dword [g_ap_fault + eax * 8 + 4], 1
+.stop:  cli
+        hlt
+        jmp     .stop
 
 section .rodata
         align   4
@@ -268,6 +356,7 @@ g_irq_log:      resd 16
 g_irq_nlog:     resd 1
 g_irq_eip:      resd 1
 g_irq_eoi:      resd 1
+g_irq_by_id:    resd 16 * 256
 g_saved_esp:
         resd    1
 g_fault:
