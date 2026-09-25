@@ -533,6 +533,22 @@ prefixes_lock(const char *name)
         { 1, SEQ(0xf0, 0x87, 0xc8) },             /* xchg eax, ecx: #UD */
         { 1, SEQ(0xf0, 0xff, 0xc0) },             /* inc eax: #UD */
         { 1, SEQ(0xf0, 0x40) },                   /* inc eax (one byte): #UD */
+        /* More forms that must be #UD, each set up so that it does nothing
+           harmful if a model runs it anyway: CR0 written with itself, the
+           GDT loaded from its own SGDT, the string pointers on the buffer. */
+        { 1, SEQ(0xf0, 0x04, 0x05) },                         /* add al, 5 */
+        { 1, SEQ(0xf0, 0x35, 0x01, 0x00, 0x00, 0x00) },       /* xor eax, 1 */
+        { 1, SEQ(0x89, 0xde, 0x89, 0xdf, 0xf0, 0xa4) },       /* movsb */
+        { 1, SEQ(0xf0, 0xc6, 0x03, 0x01) },                   /* mov byte [ebx], 1 */
+        { 1, SEQ(0xf0, 0xd1, 0x23) },                         /* shl dword [ebx], 1 */
+        { 1, SEQ(0xf0, 0x0f, 0xa4, 0x03, 0x01) },             /* shld [ebx], eax, 1 */
+        { 1, SEQ(0xf0, 0x0f, 0x94, 0x03) },                   /* setz [ebx] */
+        { 1, SEQ(0xf0, 0x0f, 0xc8) },                         /* bswap eax */
+        { 1, SEQ(0xf0, 0x8e, 0xe0) },                         /* mov fs, ax */
+        { 1, SEQ(0xf0, 0x0f, 0x20, 0xc0) },                   /* mov eax, cr0 */
+        { 1, SEQ(0x0f, 0x20, 0xc0, 0xf0, 0x0f, 0x22, 0xc0) }, /* mov cr0, eax (itself) */
+        { 1, SEQ(0xf0, 0x0f, 0x21, 0xc0) },                   /* mov eax, dr0 */
+        { 1, SEQ(0x0f, 0x01, 0x03, 0xf0, 0x0f, 0x01, 0x13) }, /* lgdt [ebx] (its own) */
     };
     struct variant v = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg,
                          .fix_input = fix_mem_ebx, .arg = MEM_OFF };
