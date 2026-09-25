@@ -476,6 +476,7 @@ static const struct group_def groups[] = {
     G(group_v86_basic),
     G(group_v86_iopl0),
     G(group_v86_io),
+    G(group_v86_ud),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

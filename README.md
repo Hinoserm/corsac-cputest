@@ -136,6 +136,7 @@ between versions until the group itself changes.
 | 237 | `v86.basic` | V86 mode at IOPL 3: 16-bit and 32-bit arithmetic, segment arithmetic, the stack, PUSHF, CLI; what stays privileged |
 | 238 | `v86.iopl0` | V86 at IOPL 0 without VME: CLI STI PUSHF POPF INT IRET #GP, ports by the bitmap |
 | 239 | `v86.io` | the I/O bitmap in V86 mode, at IOPL 3 too |
+| 240 | `v86.ud` | protected-mode-only instructions in V86 (#UD), an address past 64 KB (#GP) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
