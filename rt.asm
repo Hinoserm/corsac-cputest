@@ -1,0 +1,181 @@
+; CPU accuracy test ROM: the payload's runtime. Entry, GDT, exception
+; handlers and the trampoline every test runs through.
+
+bits 32
+
+extern  cmain
+extern  __bss_start
+extern  __bss_end
+global  _start
+global  run_kernel
+global  isr_table
+global  g_saved_esp
+global  g_fault
+
+section .text.entry
+_start:
+        cli
+        cld
+        mov     ebp, eax                ; ROM linear base, from the stub
+        ; .bss is not in the ROM image: clear it (the stack is in it too).
+        mov     edi, __bss_start
+        mov     ecx, __bss_end
+        sub     ecx, edi
+        shr     ecx, 2
+        xor     eax, eax
+        rep     stosd
+        mov     eax, ebp
+        mov     esp, stack_top
+        lgdt    [gdtr]
+        jmp     0x08:.reload
+.reload:
+        mov     ax, 0x10
+        mov     ds, ax
+        mov     es, ax
+        mov     fs, ax
+        mov     gs, ax
+        mov     ss, ax
+        push    ebp                     ; ROM linear base, from the stub
+        call    cmain
+.halt:
+        cli
+        hlt
+        jmp     .halt
+
+section .text
+
+; int run_kernel(void *code)
+; Runs one generated test. Every register but ESP may be changed by it. A
+; fault anywhere inside comes back here through isr_common with the vector
+; in g_fault; the return value is the vector, or 0xff for none.
+run_kernel:
+        mov     eax, [esp + 4]
+        pushad
+        mov     [g_saved_esp], esp
+        mov     dword [g_fault + FAULT_VEC], 0xff
+        call    eax
+kernel_return:
+        cld
+        popad
+        mov     eax, [g_fault + FAULT_VEC]
+        ret
+
+; Exceptions 0-31. The ones without an error code push a zero so the frame
+; is the same shape.
+%macro ISR_NOERR 1
+isr_%1:
+        push    dword 0
+        push    dword %1
+        jmp     isr_common
+%endmacro
+%macro ISR_ERR 1
+isr_%1:
+        push    dword %1
+        jmp     isr_common
+%endmacro
+
+ISR_NOERR 0
+ISR_NOERR 1
+ISR_NOERR 2
+ISR_NOERR 3
+ISR_NOERR 4
+ISR_NOERR 5
+ISR_NOERR 6
+ISR_NOERR 7
+ISR_ERR   8
+ISR_NOERR 9
+ISR_ERR   10
+ISR_ERR   11
+ISR_ERR   12
+ISR_ERR   13
+ISR_ERR   14
+ISR_NOERR 15
+ISR_NOERR 16
+ISR_ERR   17
+ISR_NOERR 18
+ISR_NOERR 19
+ISR_NOERR 20
+ISR_NOERR 21
+ISR_NOERR 22
+ISR_NOERR 23
+ISR_NOERR 24
+ISR_NOERR 25
+ISR_NOERR 26
+ISR_NOERR 27
+ISR_NOERR 28
+ISR_NOERR 29
+ISR_NOERR 30
+ISR_NOERR 31
+
+; Frame: [vec] [err] [eip] [cs] [eflags]. Record the registers as the
+; fault left them, then unwind to run_kernel's caller.
+isr_common:
+        pushad                          ; edi esi ebp esp ebx edx ecx eax
+        mov     eax, [esp + 28]
+        mov     [g_fault + FAULT_EAX], eax
+        mov     eax, [esp + 24]
+        mov     [g_fault + FAULT_ECX], eax
+        mov     eax, [esp + 20]
+        mov     [g_fault + FAULT_EDX], eax
+        mov     eax, [esp + 16]
+        mov     [g_fault + FAULT_EBX], eax
+        mov     eax, [esp + 8]
+        mov     [g_fault + FAULT_EBP], eax
+        mov     eax, [esp + 4]
+        mov     [g_fault + FAULT_ESI], eax
+        mov     eax, [esp + 0]
+        mov     [g_fault + FAULT_EDI], eax
+        mov     eax, [esp + 32]
+        mov     [g_fault + FAULT_VEC], eax
+        mov     eax, [esp + 36]
+        mov     [g_fault + FAULT_ERR], eax
+        mov     eax, [esp + 40]
+        mov     [g_fault + FAULT_EIP], eax
+        mov     eax, [esp + 48]
+        mov     [g_fault + FAULT_EFLAGS], eax
+        mov     esp, [g_saved_esp]
+        jmp     kernel_return
+
+section .rodata
+        align   4
+isr_table:
+%assign i 0
+%rep 32
+        dd      isr_ %+ i
+%assign i i+1
+%endrep
+
+        align   8
+gdt:
+        dq      0
+        dq      0x00cf9a000000ffff      ; 0x08: code, flat, 32-bit
+        dq      0x00cf92000000ffff      ; 0x10: data, flat
+        dq      0x00009a000000ffff      ; 0x18: code, 64 KB, 16-bit
+        dq      0x000092000000ffff      ; 0x20: data, 64 KB, 16-bit
+gdt_end:
+gdtr:
+        dw      gdt_end - gdt - 1
+        dd      gdt
+
+; Offsets into struct fault (harness.h).
+FAULT_VEC       equ 0
+FAULT_ERR       equ 4
+FAULT_EIP       equ 8
+FAULT_EFLAGS    equ 12
+FAULT_EAX       equ 16
+FAULT_ECX       equ 20
+FAULT_EDX       equ 24
+FAULT_EBX       equ 28
+FAULT_EBP       equ 32
+FAULT_ESI       equ 36
+FAULT_EDI       equ 40
+
+section .bss
+        alignb  16
+g_saved_esp:
+        resd    1
+g_fault:
+        resd    12
+        alignb  16
+        resb    65536
+stack_top:
