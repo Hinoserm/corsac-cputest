@@ -91,6 +91,14 @@ ring_end(const char *name, uint32_t cr4, uint32_t cr0)
     group_end(name);
 }
 
+/* MOV AX, CS in V86 gives the segment the test's code happens to be in,
+   which moves from pass to pass: made relative to that segment. */
+static void
+canon_v86_cs(const struct variant *v, const struct kin *in, struct kout *o)
+{
+    o->eax = (o->eax & 0xffff0000u) | ((o->eax - ((uint32_t) g_cur_low >> 4)) & 0xffff);
+}
+
 static void
 ring_run(const char *name, const struct ring_seq *seqs, unsigned n, uint32_t cr4, uint32_t cr0, void (*emit)(struct emit *, const struct variant *))
 {
@@ -611,14 +619,6 @@ group_r2_gates(void)
 }
 
 /* ---- virtual-8086 mode ------------------------------------------------------ */
-
-/* MOV AX, CS in V86 gives the segment the test's code happens to be in,
-   which moves from pass to pass: made relative to that segment. */
-static void
-canon_v86_cs(const struct variant *v, const struct kin *in, struct kout *o)
-{
-    o->eax = (o->eax & 0xffff0000u) | ((o->eax - ((uint32_t) g_cur_low >> 4)) & 0xffff);
-}
 
 /* Real-mode work in V86 at IOPL 3: 16-bit arithmetic, segment arithmetic
    (DS = 900h reaches the low buffer), the stack, PUSHF, CLI; and what
