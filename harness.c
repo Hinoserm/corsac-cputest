@@ -856,7 +856,10 @@ run_variant(const struct variant *v)
     in = g_in;
 
     int         big  = v->emit || v->stack;
-    uint8_t    *slot = arena_alloc(v->mmx ? 384 : big ? 256 : 160);
+    uint32_t    len  = v->mmx ? 384 : big ? 256 : 160;
+    if (v->target_len > 16) /* room for a long target on top */
+        len += v->target_len;
+    uint8_t    *slot = arena_alloc(len);
     struct emit e    = { slot };
     emit_prologue(&e);
     if (v->stack) {
