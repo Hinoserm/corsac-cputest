@@ -74,7 +74,7 @@ goes into the group that already covers it, not into a group of its own.
 | 18 | `int.ud`      | INT3, INT n, INTO, ICEBP, INT past the IDT (#GP), invalid encodings (#UD) |
 | 19 | `bound.arpl`  | BOUND inside, on and outside the bounds (#BR), ARPL             |
 | 20 | `misc`        | XLAT, CMC CLC STC CLD STD, WAIT, PAUSE, XCHG with memory; XLAT with ES:/CS: overrides, a null FS (#GP) and 16-bit addressing |
-| 21 | `mmx`         | every MMX instruction: arithmetic, packs, compares, shifts by register and immediate (with the #UD holes), MOVD/MOVQ |
+| 21 | `mmx`         | every MMX instruction: arithmetic, packs, compares, shifts by register and immediate (with the #UD holes), MOVD/MOVQ; the Cyrix extended MMX instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
 | 22 | `mmx.x87`     | EMMS and the x87 tag and status words after MMX, EMMS and FLD   |
 | 23 | `3dnow`       | 3DNow! and the K6-2+/K6-III+ extensions, FEMMS, PREFETCH(W)     |
 | 24 | `cmov`        | CMOVcc, all conditions, 16/32-bit, register and memory, after every producer (P6 on); CMOVZ from a bad FS operand with the condition false (the P6 reads it anyway) |
@@ -95,7 +95,7 @@ goes into the group that already covers it, not into a group of its own.
 | 195 | `aliases` | undocumented aliases: 82h, TEST /1, SAL /6, LOCK 82h, PREFETCH /2; and the #UD sub-opcodes of 8F, C6, C7, FE, FF |
 | 196 | `cpuid` | the standard, AMD/IDT extended and Centaur leaves, including the brand strings (raw CRC only) |
 | 197 | `msr.map` | which MSRs a model has (P5 test registers and counters, AMD K5/K6, IDT, P6): whether RDMSR faults, values cleared |
-| 198 | `tsc.write` | WRMSR to the TSC with the upper half set, read back: which models write all 64 bits |
+| 198 | `tsc.write` | WRMSR to the TSC with the upper half set, read back: which models write all 64 bits; RDMSR of the TSC agrees with RDTSC |
 | 199 | `cyrix.dir` | the Cyrix DIR0/DIR1 and CCR0-3 through ports 22h/23h, only on a CPU the 5/2 test or CPUID calls a Cyrix |
 | 200 | `pg.basic`    | with paging on (identity map, 4 KB pages): loads, stores, RMW, XADD/XCHG and PUSH/POP to memory, misaligned across a page boundary |
 | 201 | `pg.notpresent` | #PF from a missing page: loads, stores, RMW, LOCK, PUSH/POP to memory; error code and CR2 (RMW forms raw only); the alias page through a missing PDE, and through a present PDE and missing PTE |
@@ -166,17 +166,14 @@ goes into the group that already covers it, not into a group of its own.
 | 266 | `cr0.ts` | CR0 EM/TS/MP combinations against WAIT, FNOP, FNINIT, FLD1, EMMS, MOVD and FEMMS: #NM, #UD or run |
 | 267 | `lmsw` | LMSW never clears PE and reaches only its four bits; SMSW to a register and to memory; SGDT/SIDT at 32 and 16 bits, SLDT/STR to r32, r16 and memory |
 | 268 | `cr23.rw` | CR2 and CR3 written and read back (CR3's low bits raw) |
-| 269 | `tsc.msr` | RDMSR of the TSC agrees with RDTSC |
-| 270 | `desc.accessed` | segment loads set a descriptor's accessed bit; LAR, LSL, VERR and VERW don't (the GDT read back, CPL 0 and 3) |
-| 271 | `ldt.load` | LLDT of the LDT, null, a TSS, data, a TI=1 selector, from memory; SLDT; TI=1 loads with no LDT (#GP) |
-| 272 | `ldt.seg` | LAR/LSL, FS and SS loads through LDT selectors at CPL 0, 1 and 3: DPL, not present, past the LDT's limit |
-| 273 | `ldt.gate` | a call gate and a DPL-3 code segment in the LDT, called from rings 3, 1 and 0 |
-| 274 | `task.call` | task switches by CALL to a TSS, a GDT task gate and an IDT task gate (from rings 0 and 3): the new task's registers, TR, NT and back link; IRET back, TR and busy bits after |
-| 275 | `task.jmp` | task switches by JMP to a TSS and a task gate and back: no nesting, no back link |
-| 276 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
-| 277 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
-| 278 | `cyrix.emmi` | the Cyrix EMMI instructions (0F 50-5E) with CCR7 enabling them, and #UD without |
-| 279 | `sysops.ud` | SYSENTER, SYSEXIT, SYSCALL, SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 0 and 3 with nothing set up |
+| 269 | `desc.accessed` | segment loads set a descriptor's accessed bit; LAR, LSL, VERR and VERW don't (the GDT read back, CPL 0 and 3) |
+| 270 | `ldt.load` | LLDT of the LDT, null, a TSS, data, a TI=1 selector, from memory; SLDT; TI=1 loads with no LDT (#GP) |
+| 271 | `ldt.seg` | LAR/LSL, FS and SS loads through LDT selectors at CPL 0, 1 and 3: DPL, not present, past the LDT's limit |
+| 272 | `ldt.gate` | a call gate and a DPL-3 code segment in the LDT, called from rings 3, 1 and 0 |
+| 273 | `task.call` | task switches by CALL to a TSS, a GDT task gate and an IDT task gate (from rings 0 and 3): the new task's registers, TR, NT and back link; IRET back, TR and busy bits after |
+| 274 | `task.jmp` | task switches by JMP to a TSS and a task gate and back: no nesting, no back link |
+| 275 | `task.errors` | CALL to a busy TSS, a too-short TSS (#TS), IRET with NT and no back link, a DPL-0 TSS from ring 3, LTR of a busy TSS or data |
+| 276 | `syscall` | fast system calls: SYSENTER/SYSEXIT/SYSCALL/SYSRET, RSM, GETSEC, 0F FF, UD1 and MOV from TR6 at CPL 3 with nothing set up; AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3; Intel SYSENTER/SYSEXIT (Pentium II on) through MSRs 174h-176h, CS MSR 0 and 4, SYSEXIT outside ring 0 |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -331,9 +328,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_ring.inc` | groups 211-241: rings 1-3 and V86 mode                   |
 | `groups_ring2.inc` | groups 242-254: limits, stacks, gates, 16-bit code in rings |
 | `groups_debug.inc` | groups 255-263: single-step and the debug registers      |
-| `groups_sys.inc` | groups 264-269: control registers                        |
-| `groups_desc.inc` | groups 270 on: descriptors, the LDT, task switches        |
-| `groups_sys2.inc` | groups 293 on: SYSCALL, PVI, RDPMC, paging RMW/PDE/global, EMMI, IRET frames |
+| `groups_sys.inc` | groups 264-268: control registers; 276: fast system calls |
+| `groups_desc.inc` | groups 269-275: descriptors, the LDT, task switches       |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

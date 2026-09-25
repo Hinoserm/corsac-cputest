@@ -337,36 +337,248 @@ group_cr23(void)
     group_end(name);
 }
 
-/* RDMSR of the TSC (10h) against RDTSC just after: the two agree to within
-   a little, so EAX becomes 1; EDX is the upper halves' difference (0). */
+/* ---- fast system calls: AMD SYSCALL/SYSRET, Intel SYSENTER/SYSEXIT ------- */
+
+/* STAR: SYSCALL to 08h (SS 10h) at the variant's landing point, SYSRET to
+   48h (SS 50h), both ring 3. EFER.SCE per variant (setup 100000h). What
+   SYSCALL leaves: ECX the return address (made relative to it), CS, SS
+   and EFLAGS (IF, RF and VM cleared); what SYSRET leaves: ring 3 with
+   CS 4Bh, SS 53h and IF set (every IRQ is masked). SYSRET outside ring 0
+   is #GP, both are #UD without SCE. arg2: 0 SYSCALL, 1 SYSRET. */
+static uint32_t g_star_eip;
+
 static void
-group_tsc_msr(void)
+sysc_before(const struct variant *v)
 {
-    static const uint8_t seq[] = {
-        0xb9, 0x10, 0x00, 0x00, 0x00, /* mov ecx, 10h */
-        0x0f, 0x32,                   /* rdmsr */
-        0x89, 0xc6,                   /* mov esi, eax */
-        0x89, 0xd7,                   /* mov edi, edx */
-        0x0f, 0x31,                   /* rdtsc */
-        0x29, 0xf0,                   /* sub eax, esi */
-        0x19, 0xfa,                   /* sbb edx, edi */
-        0x3d, 0x00, 0x00, 0x01, 0x00, /* cmp eax, 10000h */
-        0x0f, 0x92, 0xc0,             /* setb al */
-        0x0f, 0xb6, 0xc0,             /* movzx eax, al */
-        0x31, 0xf6,                   /* xor esi, esi */
-        0x31, 0xff,                   /* xor edi, edi */
-        0x31, 0xc9,                   /* xor ecx, ecx */
+    ring_setup(v);
+#ifndef HOSTTEST
+    wrmsr_(MSR_STAR, g_star_eip, (SEL_CODE3 << 16) | 0x08);
+    uint32_t efer = rdmsr_lo(MSR_EFER);
+    wrmsr_(MSR_EFER, (v->arg3 & 0x100000) ? efer | 1 : efer & ~1u, 0);
+#endif
+}
+
+static void
+sysc_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    wrmsr_(MSR_EFER, rdmsr_lo(MSR_EFER) & ~1u, 0);
+    wrmsr_(MSR_STAR, 0, 0);
+#endif
+}
+
+static void
+emit_sysc_state(struct emit *e)
+{
+    static const uint8_t b[] = {
+        0x8c, 0xce,                         /* mov esi, cs */
+        0x8c, 0xd7,                         /* mov edi, ss */
+        0x9c, 0x5a,                         /* pushfd; pop edx */
+        0x81, 0xe2, 0x00, 0xff, 0xff, 0xff, /* and edx, ~0FFh: not the producer's flags */
     };
-    const char    *name = "tsc.msr";
-    struct variant v    = sys_variant(name);
-    if (!(g_cpu.features & CPUID_MSR) || !(g_cpu.features & CPUID_TSC)) {
-        group_skip(name, "no MSRs or TSC");
+    ebytes(e, b, sizeof(b));
+}
+
+static void
+emit_sysc(struct emit *e, const struct variant *v)
+{
+    if (v->arg2 == 0) {
+        e8(e, 0x0f); /* syscall */
+        e8(e, 0x05);
+        g_star_eip = (uint32_t) e->p;
+        e8(e, 0x81); /* sub ecx, here: 0 if ECX is the return address */
+        e8(e, 0xe9);
+        e32(e, g_star_eip);
+        emit_sysc_state(e);
         return;
     }
-    if (!sys_begin(name))
+    uint8_t *m = 0;
+    if (v->ring == 0) {
+        e8(e, 0xb9); /* mov ecx, M */
+        m = e->p;
+        e32(e, 0);
+    }
+    e8(e, 0x0f); /* sysret */
+    e8(e, 0x07);
+    if (m) {
+        put32_at(m, (uint32_t) e->p); /* M: in ring 3 */
+        emit_sysc_state(e);
+        e8(e, 0x31); /* xor ecx, ecx: no address in the result */
+        e8(e, 0xc9);
+        e8(e, 0xcd); /* int 30h */
+        e8(e, 0x30);
+    }
+}
+
+/* SYSENTER and SYSEXIT (Pentium II on: the Pentium Pro reports SEP but
+   hasn't got them). The SYSENTER MSRs: CS (setup 100000h: 08h; 200000h:
+   04h, whose bits 15:2 aren't zero; neither: 0, #GP), ESP the ring-0
+   stack's top, EIP the landing point. SYSENTER lands at CPL 0 with CS 08h,
+   SS 10h and IF, VM and RF clear; SYSEXIT, only from CPL 0, lands at CPL
+   3 with CS 1Bh, SS 23h (the MSR plus 16 and 24), ESP from ECX and EIP
+   from EDX. Where they land: CS, SS and EFLAGS, and ESP made relative to
+   the stack it should be, then INT 30h. arg2: 2 SYSENTER, 3 SYSEXIT. */
+static uint32_t g_sysenter_eip, g_sysenter_saved[3] RING_UNUSED;
+
+static void
+sysenter_before(const struct variant *v)
+{
+    ring_setup(v);
+#ifndef HOSTTEST
+    wrmsr_(0x174, (v->arg3 & 0x100000) ? 0x08 : (v->arg3 & 0x200000) ? 0x04 : 0, 0);
+    wrmsr_(0x175, (uint32_t) g_rstack[0] + sizeof(g_rstack[0]), 0);
+    wrmsr_(0x176, g_sysenter_eip, 0);
+#endif
+}
+
+static void
+sysenter_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    for (int i = 0; i < 3; i++)
+        wrmsr_(0x174 + i, g_sysenter_saved[i], 0);
+#endif
+}
+
+/* Where a fast call lands: CS, SS, ESP less the stack top it should be,
+   EFLAGS without the producer's, and ECX cleared (an address); INT 30h. */
+static void
+emit_landing(struct emit *e, uint32_t top)
+{
+    static const uint8_t b[] = {
+        0x8c, 0xce,                         /* mov esi, cs */
+        0x8c, 0xd7,                         /* mov edi, ss */
+        0x9c, 0x5a,                         /* pushfd; pop edx */
+        0x81, 0xe2, 0x00, 0xff, 0xff, 0xff, /* and edx, ~0FFh */
+        0x31, 0xc9,                         /* xor ecx, ecx */
+        0x89, 0xe5,                         /* mov ebp, esp */
+    };
+    ebytes(e, b, sizeof(b));
+    e8(e, 0x81); /* sub ebp, top */
+    e8(e, 0xed);
+    e32(e, top);
+    e8(e, 0xcd); /* int 30h */
+    e8(e, 0x30);
+}
+
+static void
+emit_sysenter(struct emit *e, const struct variant *v)
+{
+    if (v->arg2 == 2) {
+        e8(e, 0x0f); /* sysenter */
+        e8(e, 0x34);
+        g_sysenter_eip = (uint32_t) e->p;
+        emit_landing(e, (uint32_t) g_rstack[0] + sizeof(g_rstack[0]));
         return;
-    memcpy(v.target, seq, sizeof(seq));
-    v.target_len = sizeof(seq);
-    run_plain(&v, 2);
-    group_end(name);
+    }
+    uint8_t *m   = 0;
+    uint32_t top = (uint32_t) g_rstack[3] + sizeof(g_rstack[3]);
+    if (v->ring == 0) {
+        e8(e, 0xba); /* mov edx, M */
+        m = e->p;
+        e32(e, 0);
+        e8(e, 0xb9); /* mov ecx, the ring-3 stack */
+        e32(e, top);
+    }
+    e8(e, 0x0f); /* sysexit */
+    e8(e, 0x35);
+    if (m) {
+        put32_at(m, (uint32_t) e->p);
+        emit_landing(e, top);
+    }
+}
+
+static int
+has_sysenter(void)
+{
+    unsigned family = (g_cpu.signature >> 8) & 0xf, model = (g_cpu.signature >> 4) & 0xf;
+    return is_vendor("GenuineIntel") && (g_cpu.features & CPUID_SEP) && family == 6 && model >= 3;
+}
+
+/* The fast-call opcodes at CPL 3 with nothing set up (CPL 0 is in the
+   opcode map): #UD where a model hasn't got one, #GP where it has
+   (SYSEXIT and SYSRET outside ring 0, SYSENTER with its CS MSR 0, SYSCALL
+   without EFER.SCE is #UD), and RSM, GETSEC, 0F FF, UD1 and MOV from TR6
+   alongside. A variant that could really run is left out: SYSENTER and
+   SYSEXIT where the SYSENTER CS MSR is set, SYSCALL and SYSRET where
+   EFER.SCE is. Then SYSENTER/SYSEXIT and SYSCALL/SYSRET for real, where
+   the model has them. */
+static void
+group_syscall(void)
+{
+    static const struct {
+        uint8_t kind, len, b[3];
+    } ops[] = {
+        { 1, SEQ(0x0f, 0x34) }, { 1, SEQ(0x0f, 0x35) }, { 2, SEQ(0x0f, 0x05) }, { 2, SEQ(0x0f, 0x07) },
+        { 0, SEQ(0x0f, 0xaa) }, { 0, SEQ(0x0f, 0x37) }, { 0, SEQ(0x0f, 0xff) }, { 0, SEQ(0x0f, 0xb9, 0xc0) },
+        { 0, SEQ(0x0f, 0x24, 0xf0) },
+    };
+    static const struct {
+        uint8_t ring, mode, sce;
+    } amd[] = { { 0, 0, 1 }, { 1, 0, 1 }, { 3, 0, 1 }, { 0, 0, 0 }, { 3, 0, 0 },
+                { 0, 1, 1 }, { 1, 1, 1 }, { 3, 1, 1 }, { 3, 1, 0 } };
+    static const struct {
+        uint8_t  ring, mode;
+        uint32_t cs;
+    } intel[] = { { 3, 2, 0x100000 }, { 1, 2, 0x100000 }, { 0, 2, 0x100000 }, { 0, 2, 0x200000 }, { 3, 2, 0 },
+                  { 0, 3, 0x100000 }, { 1, 3, 0x100000 }, { 3, 3, 0x100000 }, { 0, 3, 0 } };
+    const char    *name    = "syscall";
+    struct variant v       = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                               .fix_input = fix_ring, .arg2 = RF_NONE, .fx = FX_CUSTOM, .defmask = dm_fxarg,
+                               .fx_arg = 1, .ring = 3 };
+    int            sep_set = 0, sce_set = 0, amd_sc = is_vendor("AuthenticAMD") && (g_cpu.ext_features & EXT_SYSCALL);
+#ifndef HOSTTEST
+    if (has_sysenter())
+        sep_set = rdmsr_lo(0x174) != 0;
+    if (amd_sc)
+        sce_set = rdmsr_lo(MSR_EFER) & 1;
+#endif
+    if (!ring_begin(name, 0, 0))
+        return;
+    for (unsigned i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
+        if ((ops[i].kind == 1 && sep_set) || (ops[i].kind == 2 && sce_set))
+            continue;
+        memcpy(v.target, ops[i].b, ops[i].len);
+        v.target_len = ops[i].len;
+        run_plain(&v, 1);
+    }
+    v.fix_input = 0;
+    if (amd_sc) {
+        v.before_run = sysc_before;
+        v.after_run  = sysc_after;
+        v.emit       = emit_sysc;
+        for (unsigned i = 0; i < sizeof(amd) / sizeof(amd[0]); i++) {
+            v.target[0]  = 0x0f; /* for the reports */
+            v.target[1]  = amd[i].mode ? 0x07 : 0x05;
+            v.target[2]  = amd[i].ring;
+            v.target[3]  = amd[i].sce;
+            v.target_len = 4;
+            v.ring       = amd[i].ring;
+            v.arg2       = amd[i].mode;
+            v.arg3       = amd[i].sce ? 0x100000 : 0;
+            run_plain(&v, 1);
+        }
+    }
+    if (has_sysenter()) {
+#ifndef HOSTTEST
+        if (!g_counting)
+            for (int i = 0; i < 3; i++)
+                g_sysenter_saved[i] = rdmsr_lo(0x174 + i);
+#endif
+        v.before_run = sysenter_before;
+        v.after_run  = sysenter_after;
+        v.emit       = emit_sysenter;
+        for (unsigned i = 0; i < sizeof(intel) / sizeof(intel[0]); i++) {
+            v.target[0]  = 0x0f; /* for the reports */
+            v.target[1]  = intel[i].mode == 2 ? 0x34 : 0x35;
+            v.target[2]  = intel[i].ring;
+            v.target[3]  = intel[i].cs >> 20;
+            v.target_len = 4;
+            v.ring       = intel[i].ring;
+            v.arg2       = intel[i].mode;
+            v.arg3       = intel[i].cs;
+            run_plain(&v, 1);
+        }
+    }
+    ring_end(name, 0, 0);
 }

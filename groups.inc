@@ -69,6 +69,7 @@ dm_fxarg(const struct variant *v, const struct kin *in, struct kout *d, uint16_t
 #define EXT_SYSCALL (1u << 11)
 #define MSR_EFER    0xc0000080u
 #define MSR_STAR    0xc0000081u
+#define CPUID_SEP   (1u << 11)
 #define CR4_PVI     (1u << 1)
 #define CR4_PGE     (1u << 7)
 #define CR4_PCE     (1u << 8)
@@ -449,7 +450,6 @@ group_bt(void)
 #include "groups_debug.inc"
 #include "groups_sys.inc"
 #include "groups_desc.inc"
-#include "groups_sys2.inc"
 
 /* The groups in order. A group is a function, or one of a family of
    parametrised ones (the sampled loops) with its index. */
@@ -561,7 +561,6 @@ static const struct group_def groups[] = {
     G(group_cr0_ts),
     G(group_lmsw),
     G(group_cr23),
-    G(group_tsc_msr),
     G(group_desc_accessed),
     G(group_ldt_load),
     G(group_ldt_seg),
@@ -570,8 +569,6 @@ static const struct group_def groups[] = {
     G(group_task_jmp),
     G(group_task_errors),
     G(group_syscall),
-    G(group_cyrix_emmi),
-    G(group_sysops_ud),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

@@ -118,6 +118,32 @@ group_msr_map(void)
     group_end(name);
 }
 
+/* RDMSR of the TSC (10h) against RDTSC just after: the two agree to within
+   a little, so EAX becomes 1; EDX is the upper halves' difference (0). */
+static void
+tsc_rdmsr(const char *name)
+{
+    static const uint8_t seq[] = {
+        0xb9, 0x10, 0x00, 0x00, 0x00, /* mov ecx, 10h */
+        0x0f, 0x32,                   /* rdmsr */
+        0x89, 0xc6,                   /* mov esi, eax */
+        0x89, 0xd7,                   /* mov edi, edx */
+        0x0f, 0x31,                   /* rdtsc */
+        0x29, 0xf0,                   /* sub eax, esi */
+        0x19, 0xfa,                   /* sbb edx, edi */
+        0x3d, 0x00, 0x00, 0x01, 0x00, /* cmp eax, 10000h */
+        0x0f, 0x92, 0xc0,             /* setb al */
+        0x0f, 0xb6, 0xc0,             /* movzx eax, al */
+        0x31, 0xf6,                   /* xor esi, esi */
+        0x31, 0xff,                   /* xor edi, edi */
+        0x31, 0xc9,                   /* xor ecx, ecx */
+    };
+    struct variant v = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+    memcpy(v.target, seq, sizeof(seq));
+    v.target_len = sizeof(seq);
+    run_plain(&v, 2);
+}
+
 /* WRMSR to the TSC with the upper half set, then RDTSC: the upper half
    reads back as written, or zero on models that write only 32 bits, and
    the lower half is a little past what was written. EAX becomes that
@@ -146,6 +172,7 @@ group_tsc_write(void)
     memcpy(v.target, seq, sizeof(seq));
     v.target_len = sizeof(seq);
     run_plain(&v, 1);
+    tsc_rdmsr(name);
     group_end(name);
 }
 
