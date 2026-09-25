@@ -11,6 +11,7 @@ org 0
 PAYLOAD_BASE equ 0x100000
 E820_AT      equ 0x5000             ; the BIOS memory map, for the harness
 E820_MAX     equ 64
+IDT_AT       equ 0x6000             ; the start-up IDT, until the harness loads its own
 
 rom_start:
         db      0x55, 0xaa
@@ -122,6 +123,32 @@ init:
         o32 lgdt [ss:bx]
         add     sp, 8
 
+        ; A protected-mode IDT before the switch, and NMI off across it: an
+        ; exception or NMI between here and the harness's own IDT then marks
+        ; 'F' and halts, where the real-mode IVT would triple-fault and
+        ; reset the machine. 32 gates at 0000:6000, all to pm_fault.
+        mov     al, 0x8d                ; NMI off (port 70h bit 7)
+        out     0x70, al
+        xor     ax, ax
+        mov     ds, ax
+        lea     edx, [ebp + pm_fault]
+        mov     di, IDT_AT
+        mov     cx, 32
+.idt:   mov     [di], dx
+        mov     word [di + 2], 0x08
+        mov     word [di + 4], 0x8e00
+        ror     edx, 16
+        mov     [di + 6], dx
+        ror     edx, 16
+        add     di, 8
+        loop    .idt
+        sub     sp, 8
+        mov     bx, sp
+        mov     word [ss:bx], 32 * 8 - 1
+        mov     dword [ss:bx + 2], IDT_AT
+        o32 lidt [ss:bx]
+        add     sp, 8
+
         mov     eax, cr0
         or      al, 1
         mov     cr0, eax
@@ -213,6 +240,19 @@ pm32:
         ; The payload's own GDT replaces this one; tell it where the ROM is.
         mov     eax, ebp
         jmp     0x08:PAYLOAD_BASE
+
+; An exception or NMI before the harness has its own IDT: 'F' in the marks'
+; place (column 79) and on COM1, then stop.
+pm_fault:
+        mov     ax, 0x10
+        mov     ds, ax
+        mov     word [0xb8000 + (24 * 80 + 79) * 2], 0x4f46
+        mov     dx, 0x3f8
+        mov     al, 'F'
+        out     dx, al
+.stop:  cli
+        hlt
+        jmp     .stop
 
 ; A start-up stage passed: its letter, white on red, at the bottom right
 ; of the text screen (column 76 on), and out of COM1 as it is. A board that
