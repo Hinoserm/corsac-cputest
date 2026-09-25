@@ -249,6 +249,22 @@ cpu_detect(void)
     memset(&g_cpu, 0, sizeof(g_cpu));
     g_cpu.is486 = eflags_toggles(1u << 18) != 0; /* AC exists from the 486 on */
     g_cpu.has_cpuid = eflags_toggles(1u << 21) != 0;
+    /* The Cyrix 5/2 test: 5 / 2 with the flags cleared; a Cyrix leaves
+       them as they were (a 6x86 may have CPUID turned off). */
+    {
+        uint8_t ah;
+        __asm__ volatile("xorw %%ax, %%ax\n\t"
+                         "sahf\n\t"
+                         "movw $5, %%ax\n\t"
+                         "movb $2, %%bl\n\t"
+                         "divb %%bl\n\t"
+                         "lahf\n\t"
+                         "movb %%ah, %0"
+                         : "=r"(ah)
+                         :
+                         : "eax", "ebx", "cc");
+        g_cpu.cyrix = ah == 0x02;
+    }
     if (g_cpu.has_cpuid) {
         uint32_t a, b, c, d;
         cpuid(0, &a, &b, &c, &d);
@@ -256,6 +272,8 @@ cpu_detect(void)
         memcpy(g_cpu.vendor + 4, &d, 4);
         memcpy(g_cpu.vendor + 8, &c, 4);
         g_cpu.vendor[12] = 0;
+        /* With CPUID, the vendor decides. */
+        g_cpu.cyrix = !memcmp_(g_cpu.vendor, "CyrixInstead", 12);
         if (a >= 1) {
             cpuid(1, &a, &b, &c, &d);
             g_cpu.signature = a;

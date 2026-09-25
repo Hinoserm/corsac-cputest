@@ -17,6 +17,7 @@ struct cpu_info {
     char     vendor[13];
     uint32_t signature, features;
     uint32_t ext_features; /* CPUID 80000001h EDX, 0 without it */
+    int      cyrix;        /* a Cyrix: DIV leaves the flags alone (the 5/2 test) */
 };
 
 /* What a test starts from. */
