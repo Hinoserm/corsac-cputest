@@ -515,6 +515,7 @@ static const struct group_def groups[] = {
     G(group_ldt_seg),
     G(group_ldt_gate),
     G(group_task_call),
+    G(group_task_jmp),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
