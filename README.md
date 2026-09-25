@@ -164,6 +164,7 @@ between versions until the group itself changes.
 | 265 | `cr4.bits` | every CR4 bit alone, read back: which a model has, and whether one it lacks is ignored or #GP (raw) |
 | 266 | `cr0.ts` | CR0 EM/TS/MP combinations against WAIT, FNOP, FNINIT, FLD1, EMMS, MOVD and FEMMS: #NM, #UD or run |
 | 267 | `lmsw` | LMSW never clears PE and reaches only its four bits; SMSW to a register and to memory |
+| 268 | `cr23.rw` | CR2 and CR3 written and read back (CR3's low bits raw) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
