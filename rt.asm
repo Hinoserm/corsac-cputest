@@ -35,6 +35,10 @@ _start:
         shr     ecx, 2
         xor     eax, eax
         rep     stosd
+        mov     word [0xb8000 + (24 * 80 + 78) * 2], 0x4f43 ; 'C': the harness's memory is clear (stub.asm's marks)
+        mov     dx, 0x3f8
+        mov     al, 'C'
+        out     dx, al
         mov     eax, ebp
         mov     esp, stack_top
         lgdt    [gdtr]

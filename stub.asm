@@ -200,15 +200,31 @@ pm32:
         mov     gs, ax
         mov     ss, ax
         mov     esp, 0x90000
+        mov     al, 'A'                 ; in protected mode
+        call    mark
 
         lea     esi, [ebp + payload]
         mov     edi, PAYLOAD_BASE
         mov     ecx, (payload_end - payload + 3) / 4
         rep     movsd
+        mov     al, 'B'                 ; the payload copied
+        call    mark
 
         ; The payload's own GDT replaces this one; tell it where the ROM is.
         mov     eax, ebp
         jmp     0x08:PAYLOAD_BASE
+
+; A start-up stage passed: its letter, white on red, at the bottom right
+; of the text screen (column 76 on), and out of COM1 as it is. A board that
+; stops before the harness prints shows how far it got.
+mark:
+        movzx   edx, al
+        sub     edx, 'A'
+        mov     ah, 0x4f
+        mov     [0xb8000 + (24 * 80 + 76) * 2 + edx * 2], ax
+        mov     dx, 0x3f8
+        out     dx, al
+        ret
 
         align   8
 gdt:
