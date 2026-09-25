@@ -101,8 +101,10 @@ pg_setup(const struct variant *v)
         *pte_of(s + 0x3000) &= ~PTE_P;
     if (a & 16)
         ((uint32_t *) PG_DIR)[PG_ALIAS_LIN >> 22] = PTE_P | PTE_W | PDE_PS;
-    if (a & 32)
+    if (a & 32) {
         ((uint32_t *) PG_ALIAS)[0] = g_smc_page | PTE_P | PTE_W;
+        smc_restore(v);
+    }
     if (a & 64)
         *pte_of(s + 0x2000) &= ~PTE_U;
     pg_flush();
@@ -176,6 +178,7 @@ group_pg_basic(void)
     struct variant v    = { .group = name, .paging = 1, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
 #ifndef HOSTTEST
     v.before_run = pg_reset;
+    v.after_run  = pg_reset;
 #endif
     if (!pg_begin(name, 0))
         return;
@@ -206,6 +209,7 @@ pg_run_seqs(const char *name, const struct pg_seq *seqs, unsigned n, uint32_t cr
                          .fx = FX_CUSTOM, .defmask = dm_fxarg };
 #ifndef HOSTTEST
     v.before_run = pg_setup;
+    v.after_run  = pg_reset; /* before the harness reads the buffer */
 #endif
     if (!pg_begin(name, cr0_extra))
         return;
@@ -334,6 +338,7 @@ group_pg_tlb(void)
     uint32_t       pte3 = (uint32_t) pte_of((uint32_t) SANDBOX + 0x3000);
 #ifndef HOSTTEST
     v.before_run = pg_setup;
+    v.after_run  = pg_reset; /* before the harness reads the buffer */
 #endif
     if (!g_cpu.is486) {
         group_skip(name, "386 (no INVLPG)");
@@ -450,6 +455,7 @@ group_pg_string(void)
                             .norm = (1 << R_ESI) | (1 << R_EDI) };
 #ifndef HOSTTEST
     v.before_run = pg_setup;
+    v.after_run  = pg_reset; /* before the harness reads the buffer */
 #endif
     if (!pg_begin(name, 0))
         return;
@@ -500,6 +506,8 @@ emit_smc_alias(struct emit *e, const struct variant *v)
     e8(e, 0xb0); /* L: mov al, imm8 */
     e8(e, 0x00);
     g_smc_page = (uint32_t) (l + 1) & ~0xfffu;
+    g_smc_patch = l + 1;
+    g_smc_orig  = 0x00;
     put_le(store + 2, PG_ALIAS_LIN + (((uint32_t) (l + 1)) & 0xfff), 4);
 }
 
@@ -511,6 +519,7 @@ group_pg_smc_alias(void)
                             .fx = FX_CUSTOM, .defmask = dm_fxarg, .arg3 = 32 };
 #ifndef HOSTTEST
     v.before_run = pg_setup;
+    v.after_run  = pg_reset; /* before the harness reads the buffer */
 #endif
     if (!pg_begin(name, 0))
         return;

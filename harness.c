@@ -581,6 +581,7 @@ struct variant {
     uint8_t       ring;          /* 1-3: run at that CPL; 4: in V86 mode (see ring_env_on()) */
     uint32_t      ring_flags;    /* EFLAGS bits the entry IRET adds: IOPL, AC */
     void        (*before_run)(const struct variant *v); /* before each of the four runs */
+    void        (*after_run)(const struct variant *v);  /* after each, before the harness looks at memory */
     void        (*emit)(struct emit *e, const struct variant *v); /* instead of target[] */
     defmask_fn    defmask;
 };
@@ -1315,6 +1316,8 @@ run_variant(const struct variant *v)
         if (v->before_run)
             v->before_run(v);
         int vec = run_kernel(slot);
+        if (v->after_run)
+            v->after_run(v);
         capture(v, &out[r], slot, vec, mem);
         if (v->mmx)
             memcpy(g_mmx_runs[r], g_mmx_out, sizeof(g_mmx_out));

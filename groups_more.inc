@@ -20,6 +20,19 @@ e_abs(struct emit *e, uint8_t op, uint8_t modrm, uint8_t *addr)
     e32(e, (uint32_t) addr);
 }
 
+/* The byte a test patches, and what it held: put back before every run, so
+   all four start from the same code (a CPU that runs a stale prefetched
+   byte would otherwise run it only the first time). */
+static uint8_t *g_smc_patch;
+static uint8_t  g_smc_orig;
+
+static void
+smc_restore(const struct variant *v)
+{
+    if (g_smc_patch)
+        *g_smc_patch = g_smc_orig;
+}
+
 /* arg2 is the kind. The patched instruction is at L; its address is only
    known once emitted, so the store's operand is filled in afterwards. */
 static void
@@ -45,6 +58,7 @@ emit_smc(struct emit *e, const struct variant *v)
             e8(e, 0xb0);
             e8(e, 0x00);
             put_le(store + 2, (uint32_t) (l + 1), 4);
+            g_smc_patch = l + 1;
             break;
         case 3: /* mov [L+1], edx; jmp L; L: mov esi, imm32 */
             store = e->p;
@@ -55,6 +69,7 @@ emit_smc(struct emit *e, const struct variant *v)
             e8(e, 0xbe);
             e32(e, 0);
             put_le(store + 2, (uint32_t) (l + 1), 4);
+            g_smc_patch = l + 1; /* the low byte of the dword */
             break;
         case 4: /* mov byte [L], 48h; jmp L; L: inc eax (now dec eax) */
             store = e->p;
@@ -65,6 +80,7 @@ emit_smc(struct emit *e, const struct variant *v)
             l = e->p;
             e8(e, 0x40);
             put_le(store + 2, (uint32_t) l, 4);
+            g_smc_patch = l;
             break;
         default: /* a loop that repatches an instruction of its own block */
             e8(e, 0xbf); /* mov edi, 3 */
@@ -87,8 +103,10 @@ emit_smc(struct emit *e, const struct variant *v)
             e8(e, 0x75); /* jnz top */
             e8(e, (uint8_t) (top - (e->p + 1)));
             put_le(store + 2, (uint32_t) (l + 2), 4);
+            g_smc_patch = l + 2;
             break;
     }
+    g_smc_orig = *g_smc_patch;
 }
 
 static void
@@ -110,7 +128,7 @@ group_smc(void)
         { 0, SEQ(0x88, 0x83) },
     };
     const char    *name = "smc";
-    struct variant v    = { .group = name, .emit = emit_smc, .fx = FX_CUSTOM, .defmask = dm_arg3 };
+    struct variant v    = { .group = name, .emit = emit_smc, .fx = FX_CUSTOM, .defmask = dm_arg3, .before_run = smc_restore };
     group_begin(name);
     for (unsigned k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         memcpy(v.target, kinds[k].b, kinds[k].len);

@@ -330,6 +330,9 @@ ring_pf_run(const char *name, const struct ring_seq *seqs, unsigned n, uint32_t 
 {
     struct variant v = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
                          .fix_input = fix_ring, .fx = FX_CUSTOM, .defmask = dm_fxarg, .paging = 1 };
+#ifndef HOSTTEST
+    v.after_run = pg_reset;
+#endif
     if (!ring_begin(name, 0, 0))
         return;
 #ifndef HOSTTEST
