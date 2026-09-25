@@ -253,3 +253,52 @@ group_rdpmc_pce(void)
     rx_run(&v, seqs, sizeof(seqs) / sizeof(seqs[0]));
     ring_end(v.group, 0, 0);
 }
+
+/* ---- read-modify-write on read-only and clean pages ------------------------------------- */
+
+/* With CR0.WP: CMPXCHG and CMPXCHG8B on a read-only page fault whether
+   the compare succeeds or not (a failed compare writes the old value
+   back), XADD and locked BTS and ADD fault, BT only reads. On a clean
+   writable page, the PTE read back after: a failed compare still sets
+   D. The failed-compare cases are raw only. */
+static void
+group_pg_rmw(void)
+{
+    static const struct {
+        uint8_t setup, defined, pte, len, b[12];
+    } t[] = {
+        { 4, 1, 0, SEQ(0x8b, 0x43, 0x18, 0x0f, 0xb1, 0x4b, 0x18) },                   /* cmpxchg, equal */
+        { 4, 0, 0, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xb1, 0x4b, 0x18) },       /* cmpxchg, not */
+        { 4, 0, 0, SEQ(0x8a, 0x43, 0x18, 0xf6, 0xd0, 0x0f, 0xb0, 0x4b, 0x18) },       /* byte, not */
+        { 4, 1, 0, SEQ(0x8b, 0x43, 0x18, 0x8b, 0x53, 0x1c, 0x0f, 0xc7, 0x4b, 0x18) }, /* cmpxchg8b, equal */
+        { 4, 0, 0, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xc7, 0x4b, 0x18) },       /* cmpxchg8b, not */
+        { 4, 1, 0, SEQ(0x0f, 0xc1, 0x43, 0x18) },                                     /* xadd */
+        { 4, 1, 0, SEQ(0xf0, 0x0f, 0xba, 0x6b, 0x18, 0x05) },                         /* lock bts */
+        { 4, 1, 0, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },                               /* bt: a read */
+        { 4, 1, 0, SEQ(0xf0, 0x83, 0x43, 0x18, 0x00) },                               /* lock add 0 */
+        { 0, 1, 1, SEQ(0x8b, 0x43, 0x18, 0x0f, 0xb1, 0x4b, 0x18) },                   /* equal: D */
+        { 0, 0, 1, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xb1, 0x4b, 0x18) },       /* not: D too */
+        { 0, 0, 1, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xc7, 0x4b, 0x18) },       /* cmpxchg8b not */
+        { 0, 1, 1, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },                               /* bt: A only */
+    };
+    static struct pg_seq seqs[sizeof(t) / sizeof(t[0])];
+    uint32_t             pte = (uint32_t) pte_of((uint32_t) SANDBOX + 0x2000);
+    for (unsigned i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        int n = t[i].len;
+        memcpy(seqs[i].b, t[i].b, n);
+        if (t[i].pte) {
+            seqs[i].b[n++] = 0x8b; /* mov esi, [pte] */
+            seqs[i].b[n++] = 0x35;
+            put_le(seqs[i].b + n, pte, 4);
+            n += 4;
+        }
+        seqs[i].len     = n;
+        seqs[i].setup   = t[i].setup;
+        seqs[i].defined = t[i].defined;
+    }
+    if (!g_cpu.is486) {
+        group_skip("pg.rmw", "386 (no CR0.WP)");
+        return;
+    }
+    pg_run_seqs("pg.rmw", seqs, sizeof(seqs) / sizeof(seqs[0]), CR0_WP);
+}

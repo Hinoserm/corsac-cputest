@@ -192,6 +192,7 @@ between versions until the group itself changes.
 | 293 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
 | 294 | `r3.pvi` | CR4.PVI: CLI and STI change VIF at CPL 3, STI with VIP set #GP, POPFD leaves IF and VIF, IOPL 3 and rings 1-2 unaffected |
 | 295 | `rdpmc.pce` | RDPMC of counters 0-2 at CPL 0, and at CPL 1-3 with and without CR4.PCE (Pentium MMX, Pentium Pro) |
+| 296 | `pg.rmw` | CMPXCHG, CMPXCHG8B, XADD and locked BTS/ADD on a read-only page (WP), compare equal and not; the dirty bit after a failed compare |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
