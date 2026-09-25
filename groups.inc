@@ -433,6 +433,7 @@ static const struct group_def groups[] = {
     G(group_cpuid),
     G(group_msr_map),
     G(group_tsc_write),
+    G(group_cyrix),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

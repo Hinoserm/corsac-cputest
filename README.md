@@ -100,6 +100,7 @@ between versions until the group itself changes.
 | 196 | `cpuid` | the standard, AMD/IDT extended and Centaur leaves, including the brand strings (raw CRC only) |
 | 197 | `msr.map` | which MSRs a model has (P5 test registers and counters, AMD K5/K6, IDT, P6): whether RDMSR faults, values cleared |
 | 198 | `tsc.write` | WRMSR to the TSC with the upper half set, read back: which models write all 64 bits |
+| 199 | `cyrix.dir` | the Cyrix DIR0/DIR1 and CCR0-3 through ports 22h/23h, only on a CPU the 5/2 test or CPUID calls a Cyrix |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
