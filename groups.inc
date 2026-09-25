@@ -436,6 +436,7 @@ static const struct group_def groups[] = {
     G(group_tsc_write),
     G(group_cyrix),
     G(group_pg_basic),
+    G(group_pg_notpresent),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
