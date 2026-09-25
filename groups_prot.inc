@@ -470,3 +470,21 @@ group_seg_types(void)
     }
     ring_end(v.group, 0, 0);
 }
+
+/* ---- IDT gates that must fail, and the IDT's limit ---------------------------------------- */
+
+/* INT through a missing gate (#NP), a gate of an invalid type, one whose
+   selector is data or null (#GP), and a 386 trap gate, from rings 0 and
+   3. */
+static void
+group_idt_types(void)
+{
+    static struct ring_seq seqs[10];
+    int                    n = 0;
+    for (int r = 0; r <= 3; r += 3)
+        for (int vec = 0x39; vec <= 0x3d; vec++) {
+            struct ring_seq q = { r, 0, 0, 0, RF_NONE, 1, 2, { 0xcd, (uint8_t) vec } };
+            seqs[n++]         = q;
+        }
+    ring_run("idt.types", seqs, n, 0, 0, 0);
+}
