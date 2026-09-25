@@ -94,3 +94,37 @@ group_rdtsc(void)
     run_ctx(&v, ctx_some, 3, 8);
     group_end(name);
 }
+
+/* The multi-byte NOP (0F 1F /0) and the reserved-NOP opcodes 0F 19-1E:
+   NOPs from the Pentium Pro on, #UD on the Pentium and the K6. Faults are
+   results here, so this group's CRCs tell the two families apart; they
+   never touch the memory their ModRM names. */
+static void
+group_nop_p6(void)
+{
+    static const struct {
+        uint8_t len;
+        uint8_t b[9];
+    } seqs[] = {
+        { 3, { 0x0f, 0x1f, 0x00 } },                                     /* nop [eax] */
+        { 4, { 0x0f, 0x1f, 0x40, 0x00 } },                               /* nop [eax+0] */
+        { 5, { 0x0f, 0x1f, 0x44, 0x00, 0x00 } },                         /* nop [eax+eax*1+0] */
+        { 6, { 0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00 } },                   /* nop word [...] */
+        { 7, { 0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00 } },             /* nop [eax+0L] */
+        { 8, { 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 } },       /* nop [eax+eax*1+0L] */
+        { 9, { 0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 } }, /* nop word [...+0L] */
+        { 3, { 0x0f, 0x1f, 0xc0 } },                                     /* nop eax */
+        { 3, { 0x0f, 0x19, 0x00 } },                                     /* reserved NOP 0F 19 */
+        { 3, { 0x0f, 0x1c, 0xc1 } },                                     /* reserved NOP 0F 1C */
+        { 3, { 0x0f, 0x1e, 0x03 } },                                     /* reserved NOP 0F 1E */
+    };
+    const char    *name = "nop.p6";
+    struct variant v    = { .group = name, .faults_ok = 1 };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        run_ctx(&v, ctx_some, 3, 2);
+    }
+    group_end(name);
+}
