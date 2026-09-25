@@ -289,6 +289,66 @@ cpu_detect(void)
     }
 }
 
+/* The BIOS memory map the loader collected (stub.asm): at E820_AT a
+   status word, an entry count, then 24-byte entries. Whether the call
+   exists and gives a sane table is the BIOS's business, so a failure is a
+   result, not a stop: e820_read() checks the table and only the tests
+   that need it are left out when it's missing or bad. */
+#define E820_AT  0x5000u
+#define E820_MAX 64
+enum { E820_NOT_RUN, E820_OK, E820_NO_CALL, E820_NOT_SMAP, E820_TOO_MANY, E820_SHORT, E820_CORRUPT, E820_NO_RAM };
+
+struct e820_entry {
+    uint64_t base, len;
+    uint32_t type, attr;
+} __attribute__((packed));
+
+static struct e820_entry g_e820[E820_MAX];
+static unsigned          g_e820_n, g_e820_status;
+static uint32_t          g_e820_mb_high; /* usable RAM at or above 4 GB, in MB */
+static uint64_t          g_hi_page;      /* a 4 MB-aligned usable 4 KB at or above 4 GB, below 64 GB; 0 if none */
+
+static void
+e820_read(void)
+{
+#ifndef HOSTTEST
+    volatile uint16_t *h = (volatile uint16_t *) E820_AT;
+    g_e820_status        = h[0];
+    g_e820_n             = h[1];
+    if (g_e820_n > E820_MAX) {
+        g_e820_status = E820_CORRUPT;
+        g_e820_n      = 0;
+    }
+    memcpy(g_e820, (const void *) (E820_AT + 8), g_e820_n * sizeof(g_e820[0]));
+    if (g_e820_status != E820_OK)
+        return;
+    int usable = 0;
+    for (unsigned i = 0; i < g_e820_n; i++) {
+        const struct e820_entry *e = &g_e820[i];
+        uint64_t                 end = e->base + e->len;
+        if (e->type == 0 || end < e->base) { /* no such type; wraps past 2^64 */
+            g_e820_status = E820_CORRUPT;
+            g_hi_page     = 0;
+            g_e820_mb_high = 0;
+            return;
+        }
+        if (e->type != 1 || e->len == 0)
+            continue;
+        usable = 1;
+        if (end > 0x100000000ull) {
+            uint64_t from = e->base > 0x100000000ull ? e->base : 0x100000000ull;
+            uint64_t mb   = g_e820_mb_high + ((end - from) >> 20);
+            g_e820_mb_high = mb > 0xffffffffu ? 0xffffffffu : (uint32_t) mb;
+            uint64_t page  = (from + 0x3fffff) & ~0x3fffffull;
+            if (!g_hi_page && page + 0x1000 <= end && page + 0x1000 <= (1ull << 36))
+                g_hi_page = page;
+        }
+    }
+    if (!usable)
+        g_e820_status = E820_NO_RAM;
+#endif
+}
+
 #ifndef HOSTTEST
 static uint8_t
 cmos_read(uint8_t reg)
@@ -310,6 +370,7 @@ ram_detect(void)
         ext = 4096;
     g_ram_top = 0x100000 + ext * 1024;
 }
+
 
 struct idt_entry {
     uint16_t off_lo, sel;
@@ -2088,6 +2149,7 @@ cmain(uint32_t rom_base)
     crc_init();
     idt_init();
     cpu_detect();
+    e820_read();
     ram_detect();
     arena_init();
 #ifndef HOSTTEST
@@ -2111,7 +2173,16 @@ cmain(uint32_t rom_base)
     puthex(rom_base, 5);
     puts_(" ram=");
     putdec(g_ram_top >> 20);
-    puts_("M cpu=");
+    puts_("M e820=");
+    putdec(g_e820_status);
+    puts_("/");
+    putdec(g_e820_n);
+    if (g_e820_mb_high) {
+        puts_(" above4g=");
+        putdec(g_e820_mb_high);
+        puts_("M");
+    }
+    puts_(" cpu=");
     if (g_cpu.has_cpuid) {
         puts_(g_cpu.vendor);
         puts_(" sig=");

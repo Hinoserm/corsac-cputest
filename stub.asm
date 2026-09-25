@@ -9,6 +9,8 @@ bits 16
 org 0
 
 PAYLOAD_BASE equ 0x100000
+E820_AT      equ 0x5000             ; the BIOS memory map, for the harness
+E820_MAX     equ 64
 
 rom_start:
         db      0x55, 0xaa
@@ -22,6 +24,54 @@ init:
         xor     ax, ax
         mov     ss, ax
         mov     sp, 0x7000
+
+        ; The BIOS memory map (INT 15h, AX=E820h) for the harness, at
+        ; 0000:E820_AT: a status word, an entry count, then 24-byte
+        ; entries. The status is itself a result (a BIOS without the call
+        ; is no fault of the CPU), so every way the call can fail ends the
+        ; loop with its own status instead of a hang or a bad table:
+        ; 1 read, 2 no such call (CF at once), 3 not "SMAP" back, 4 more
+        ; than E820_MAX entries, 5 an entry shorter than 20 bytes.
+        mov     ds, ax
+        mov     es, ax
+        mov     dword [E820_AT], 0
+        mov     di, E820_AT + 8
+        xor     ebx, ebx
+        sti
+.e820:
+        mov     eax, 0xe820
+        mov     edx, 0x534d4150         ; "SMAP"
+        mov     ecx, 24
+        mov     dword [di + 20], 1      ; ACPI 3 attributes: valid unless the BIOS writes them
+        int     0x15
+        jc      .e820_cf
+        cmp     eax, 0x534d4150
+        jne     .e820_sig
+        cmp     ecx, 20
+        jb      .e820_short
+        inc     word [E820_AT + 2]
+        add     di, 24
+        test    ebx, ebx
+        jz      .e820_ok
+        cmp     word [E820_AT + 2], E820_MAX
+        jb      .e820
+        mov     word [E820_AT], 4
+        jmp     .e820_done
+.e820_cf:                               ; CF after some entries: the end of the list
+        cmp     word [E820_AT + 2], 0
+        jne     .e820_ok
+        mov     word [E820_AT], 2
+        jmp     .e820_done
+.e820_sig:
+        mov     word [E820_AT], 3
+        jmp     .e820_done
+.e820_short:
+        mov     word [E820_AT], 5
+        jmp     .e820_done
+.e820_ok:
+        mov     word [E820_AT], 1
+.e820_done:
+        cli
 
         ; A20: port 92h (fast A20), then the keyboard controller for boards
         ; without it.

@@ -28,6 +28,7 @@
 #define CR0_WP (1u << 16)
 #define CR4_PSE (1u << 4)
 #define CPUID_PSE (1u << 3)
+#define CPUID_PSE36 (1u << 17)
 
 /* The code page a pg.smc.alias variant patches, set when it is emitted. */
 static uint32_t g_smc_page;
@@ -94,7 +95,8 @@ pg_reset(const struct variant *v)
    64: the second page supervisor-only (with g_pg_user);
    128: the first alias page (1 GB) onto the buffer's second page;
    256: the alias area's PDE read-only; 512: not present; 1024: not user;
-   2048: the first alias PTE not user; 4096: global (G). */
+   2048: the first alias PTE not user; 4096: global (G);
+   8192: 1 GB up a 4 MB page onto g_hi_page, above 4 GB (PSE-36). */
 static void
 pg_setup(const struct variant *v)
 {
@@ -129,6 +131,8 @@ pg_setup(const struct variant *v)
         al[0] &= ~PTE_U;
     if (a & 4096)
         al[0] |= 0x100;
+    if (a & 8192) /* physical 35:32 in PDE bits 16:13 */
+        *pde = (uint32_t) (g_hi_page & 0xffc00000u) | (((uint32_t) (g_hi_page >> 32) & 0xf) << 13) | PTE_P | PTE_W | PDE_PS;
     pg_flush();
 }
 
@@ -320,7 +324,7 @@ group_pg_basic(void)
 
 /* A table of byte sequences run with one page setup each. */
 struct pg_seq {
-    uint8_t  setup, defined, len, b[20];
+    uint8_t  setup, defined, len, b[24];
     uint16_t setup_hi; /* pg_setup bits from 256 up, added to setup */
 };
 
@@ -597,11 +601,15 @@ group_pg_tlb(void)
 
 /* A 4 MB page (CR4.PSE) at 1 GB onto physical 0: the buffer read and
    written through it and through the identity map, and the directory
-   entry's accessed and dirty bits. */
+   entry's accessed and dirty bits. With PSE-36 (Pentium II Deschutes on)
+   and usable RAM above 4 GB in the BIOS map (e820), the page onto that
+   RAM instead: a dword written and read back through it, and the PDE's
+   flag bits (its address bits are the machine's). */
 static void
 group_pg_pse(void)
 {
-    static struct pg_seq seqs[4];
+    static struct pg_seq seqs[5];
+    unsigned             n_seqs = 4;
     const char          *name = "pg.pse";
     uint32_t             pde  = PG_DIR + (PG_ALIAS_LIN >> 22) * 4;
     if (!(g_cpu.features & CPUID_PSE)) {
@@ -625,6 +633,20 @@ group_pg_pse(void)
         seqs[i].setup   = 16;
         seqs[i].defined = 1;
     }
+    if ((g_cpu.features & CPUID_PSE36) && g_hi_page) {
+        static const uint8_t hi[] = {
+            0x89, 0x0d, 0x18, 0x00, 0x00, 0x40, /* mov [40000018h], ecx */
+            0xa1, 0x18, 0x00, 0x00, 0x40,       /* mov eax, [40000018h] */
+            0x8b, 0x35, 0x00, 0x04, 0x20, 0x00, /* mov esi, [the PDE] */
+            0x81, 0xe6, 0xff, 0x1f, 0x00, 0x00, /* and esi, 1FFFh */
+        };
+        memcpy(seqs[4].b, hi, sizeof(hi));
+        seqs[4].len      = sizeof(hi);
+        seqs[4].setup    = 0;
+        seqs[4].setup_hi = 8192;
+        seqs[4].defined  = 1;
+        n_seqs           = 5;
+    }
 #ifndef HOSTTEST
     uint32_t cr4 = 0;
     if (!g_counting) {
@@ -632,7 +654,7 @@ group_pg_pse(void)
         __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 | CR4_PSE));
     }
 #endif
-    pg_run_seqs(name, seqs, 4, 0);
+    pg_run_seqs(name, seqs, n_seqs, 0);
 #ifndef HOSTTEST
     if (!g_counting)
         __asm__ volatile("mov %0, %%cr4" : : "r"(cr4));

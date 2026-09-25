@@ -493,6 +493,7 @@ static const struct group_def groups[] = {
     G(group_msr_map),
     G(group_tsc_write),
     G(group_cyrix),
+    G(group_e820),
     G(group_pg_basic),
     G(group_pg_notpresent),
     G(group_pg_readonly_wp0),

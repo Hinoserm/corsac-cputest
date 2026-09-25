@@ -297,3 +297,52 @@ group_cyrix(void)
     }
     group_end(name);
 }
+
+/* The BIOS memory map (INT 15h E820) the loader collected, as the machine
+   reports it: the answer is the board's, not the CPU's, so there is no
+   reference and no outcome stops the test; a missing or bad table only
+   turns off what needs it (PSE-36 above 4 GB). EAX the status (1 read,
+   2 no such call, 3 not "SMAP" back, 4 more than 64 entries, 5 an entry
+   under 20 bytes, 6 corrupt: type 0 or wrapping past 2^64, 7 no usable
+   RAM), ECX the entries, EDX the usable MB above 4 GB, ESI 1 when there
+   is a page for PSE-36 there. The entries are printed too. */
+static void
+group_e820(void)
+{
+    const char    *name = "e820";
+    struct variant v    = { .group = name, .no_ref = 1 };
+#ifdef HOSTTEST
+    group_skip(name, "BIOS (host build)");
+    return;
+#endif
+    group_begin(name);
+    if (!g_counting) {
+        for (unsigned i = 0; i < g_e820_n; i++) {
+            puts_("E820 ");
+            puthex((uint32_t) (g_e820[i].base >> 32), 8);
+            puthex((uint32_t) g_e820[i].base, 8);
+            putch(' ');
+            puthex((uint32_t) (g_e820[i].len >> 32), 8);
+            puthex((uint32_t) g_e820[i].len, 8);
+            putch(' ');
+            putdec(g_e820[i].type);
+            putch('\n');
+        }
+    }
+    int n = 0;
+    v.target[n++] = 0xb8; /* mov eax, status */
+    put_le(v.target + n, g_e820_status, 4);
+    n += 4;
+    v.target[n++] = 0xb9; /* mov ecx, entries */
+    put_le(v.target + n, g_e820_n, 4);
+    n += 4;
+    v.target[n++] = 0xba; /* mov edx, MB above 4 GB */
+    put_le(v.target + n, g_e820_mb_high, 4);
+    n += 4;
+    v.target[n++] = 0xbe; /* mov esi, a PSE-36 page */
+    put_le(v.target + n, g_hi_page != 0, 4);
+    n += 4;
+    v.target_len = n;
+    run_plain(&v, 1);
+    group_end(name);
+}
