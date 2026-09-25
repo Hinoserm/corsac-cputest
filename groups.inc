@@ -399,6 +399,7 @@ group_bt(void)
 #include "groups_sys.inc"
 #include "groups_desc.inc"
 #include "groups_prot.inc"
+#include "groups_sys2.inc"
 
 /* The groups in order. A group is a function, or one of a family of
    parametrised ones (the sampled loops) with its index. */
@@ -534,6 +535,7 @@ static const struct group_def groups[] = {
     G(group_sgdt_forms),
     G(group_iret_flags),
     G(group_xlat),
+    G(group_syscall),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

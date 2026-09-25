@@ -189,6 +189,7 @@ between versions until the group itself changes.
 | 290 | `sgdt.forms` | SGDT and SIDT with 32- and 16-bit operands, SLDT and STR to 32- and 16-bit registers and memory |
 | 291 | `iret.flags` | IRETD at CPL 0 with EFLAGS images carrying IOPL, AC, ID, RF, VIF and VIP: which of them stick |
 | 292 | `xlat` | XLAT with DS, ES: and CS: overrides, a null FS (#GP) and 16-bit addressing |
+| 293 | `syscall` | AMD SYSCALL/SYSRET through STAR and EFER.SCE from rings 0, 1 and 3: ECX, CS, SS and EFLAGS after; SYSRET outside ring 0 (#GP), both without SCE (#UD) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -346,6 +347,7 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_sys.inc` | groups 264-269: control registers                        |
 | `groups_desc.inc` | groups 270 on: descriptors, the LDT, task switches        |
 | `groups_prot.inc` | groups 277 on: LOCK, overrides, far loads, descriptor types, IDT |
+| `groups_sys2.inc` | groups 293 on: SYSCALL, PVI, RDPMC, paging RMW/PDE/global, EMMI, IRET frames |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

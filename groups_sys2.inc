@@ -1,0 +1,177 @@
+/*
+ * More system corners: AMD SYSCALL/SYSRET, CR4.PVI, RDPMC and CR4.PCE,
+ * read-modify-write instructions on read-only and clean pages, the page
+ * directory entry's own bits, global pages, the Cyrix EMMI extension,
+ * segment overrides on string instructions, IRETD's checks on the frame
+ * it returns through, the fast system-call opcodes where they don't
+ * exist, and CMOV's memory read when the condition is false. Included
+ * into groups.inc after groups_prot.inc; append only.
+ */
+
+#define EXT_SYSCALL (1u << 11)
+#define MSR_EFER    0xc0000080u
+#define MSR_STAR    0xc0000081u
+#define CR4_PVI     (1u << 1)
+#define CR4_PGE     (1u << 7)
+#define CR4_PCE     (1u << 8)
+#define CPUID_PGE   (1u << 13)
+#define EF_VIF      0x80000u
+#define EF_VIP      0x100000u
+#define ALIAS       0x00, 0x00, 0x00, 0x40 /* PG_ALIAS_LIN, little-endian */
+
+/* A ring sequence with any EFLAGS on the way in and a 32-bit setup (arg3:
+   ring_setup's bitmaps in bits 0-1, pg_setup's pages from 128 up, a
+   group's own bits from 100000h). */
+struct rx_seq {
+    uint8_t  ring, iopl, defined, len, b[24];
+    uint32_t flags;
+    uint32_t setup;
+};
+
+static __attribute__((unused)) void
+rx_run(struct variant *v, const struct rx_seq *seqs, unsigned n)
+{
+    for (unsigned i = 0; i < n; i++) {
+        memcpy(v->target, seqs[i].b, seqs[i].len);
+        v->target_len = seqs[i].len;
+        v->ring       = seqs[i].ring;
+        v->ring_flags = IOPL(seqs[i].iopl) | seqs[i].flags;
+        v->arg3       = seqs[i].setup;
+        v->fx_arg     = seqs[i].defined;
+        run_plain(v, 1);
+    }
+}
+
+#ifndef HOSTTEST
+static __attribute__((unused)) void
+wrmsr_(uint32_t msr, uint32_t lo, uint32_t hi)
+{
+    __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
+}
+
+static __attribute__((unused)) uint32_t
+rdmsr_lo(uint32_t msr)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return lo;
+}
+
+static __attribute__((unused)) void
+cr4_set(uint32_t bits, int on)
+{
+    uint32_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 = on ? cr4 | bits : cr4 & ~bits;
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+}
+#endif
+
+static int
+is_vendor(const char *v)
+{
+    return g_cpu.has_cpuid && !memcmp_(g_cpu.vendor, v, 12);
+}
+
+/* ---- AMD SYSCALL and SYSRET (K6-2, K6-III) ------------------------------------ */
+
+/* STAR: SYSCALL to 08h (SS 10h) at the variant's landing point, SYSRET to
+   48h (SS 50h), both ring 3. EFER.SCE per variant (setup 100000h). What
+   SYSCALL leaves: ECX the return address (made relative to it), CS, SS
+   and EFLAGS (IF, RF and VM cleared); what SYSRET leaves: ring 3 with
+   CS 4Bh, SS 53h and IF set (every IRQ is masked). SYSRET outside ring 0
+   is #GP, both are #UD without SCE. arg2: 0 SYSCALL, 1 SYSRET. */
+static uint32_t g_star_eip;
+
+static void
+sysc_before(const struct variant *v)
+{
+    ring_setup(v);
+#ifndef HOSTTEST
+    wrmsr_(MSR_STAR, g_star_eip, (SEL_CODE3 << 16) | 0x08);
+    uint32_t efer = rdmsr_lo(MSR_EFER);
+    wrmsr_(MSR_EFER, (v->arg3 & 0x100000) ? efer | 1 : efer & ~1u, 0);
+#endif
+}
+
+static void
+sysc_after(const struct variant *v)
+{
+#ifndef HOSTTEST
+    wrmsr_(MSR_EFER, rdmsr_lo(MSR_EFER) & ~1u, 0);
+    wrmsr_(MSR_STAR, 0, 0);
+#endif
+}
+
+static void
+emit_sysc_state(struct emit *e)
+{
+    static const uint8_t b[] = {
+        0x8c, 0xce,                         /* mov esi, cs */
+        0x8c, 0xd7,                         /* mov edi, ss */
+        0x9c, 0x5a,                         /* pushfd; pop edx */
+        0x81, 0xe2, 0x00, 0xff, 0xff, 0xff, /* and edx, ~0FFh: not the producer's flags */
+    };
+    ebytes(e, b, sizeof(b));
+}
+
+static void
+emit_sysc(struct emit *e, const struct variant *v)
+{
+    if (v->arg2 == 0) {
+        e8(e, 0x0f); /* syscall */
+        e8(e, 0x05);
+        g_star_eip = (uint32_t) e->p;
+        e8(e, 0x81); /* sub ecx, here: 0 if ECX is the return address */
+        e8(e, 0xe9);
+        e32(e, g_star_eip);
+        emit_sysc_state(e);
+        return;
+    }
+    uint8_t *m = 0;
+    if (v->ring == 0) {
+        e8(e, 0xb9); /* mov ecx, M */
+        m = e->p;
+        e32(e, 0);
+    }
+    e8(e, 0x0f); /* sysret */
+    e8(e, 0x07);
+    if (m) {
+        put32_at(m, (uint32_t) e->p); /* M: in ring 3 */
+        emit_sysc_state(e);
+        e8(e, 0x31); /* xor ecx, ecx: no address in the result */
+        e8(e, 0xc9);
+        e8(e, 0xcd); /* int 30h */
+        e8(e, 0x30);
+    }
+}
+
+static void
+group_syscall(void)
+{
+    static const struct {
+        uint8_t ring, mode, sce;
+    } cases[] = { { 0, 0, 1 }, { 1, 0, 1 }, { 3, 0, 1 }, { 0, 0, 0 }, { 3, 0, 0 },
+                  { 0, 1, 1 }, { 1, 1, 1 }, { 3, 1, 1 }, { 3, 1, 0 } };
+    struct variant v = { .group = "syscall", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = sysc_before,
+                         .after_run = sysc_after, .emit = emit_sysc, .fx = FX_CUSTOM, .defmask = dm_fxarg,
+                         .fx_arg = 1 };
+    if (!is_vendor("AuthenticAMD") || !(g_cpu.ext_features & EXT_SYSCALL)) {
+        group_skip(v.group, "no AMD SYSCALL");
+        return;
+    }
+    if (!ring_begin(v.group, 0, 0))
+        return;
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        v.target[0]  = 0x0f; /* for the reports */
+        v.target[1]  = cases[i].mode ? 0x07 : 0x05;
+        v.target[2]  = cases[i].ring;
+        v.target[3]  = cases[i].sce;
+        v.target_len = 4;
+        v.ring       = cases[i].ring;
+        v.arg2       = cases[i].mode;
+        v.arg3       = cases[i].sce ? 0x100000 : 0;
+        run_plain(&v, 1);
+    }
+    ring_end(v.group, 0, 0);
+}

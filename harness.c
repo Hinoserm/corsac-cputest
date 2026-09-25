@@ -1086,7 +1086,10 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
         if (v->paging && vec == 14) {
             uint32_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-            o->fault_err = (g_fault.err & 0xff) | ((cr2 - (uint32_t) g_buf) << 8);
+            /* CR2 relative to the buffer, or (bit 31) to the alias area at
+               1 GB, so it doesn't move with the build */
+            o->fault_err = cr2 >= 0x40000000u ? 0x80000000u | (g_fault.err & 0xff) | ((cr2 - 0x40000000u) << 8)
+                                              : (g_fault.err & 0xff) | ((cr2 - (uint32_t) g_buf) << 8);
         }
 #endif
     }
@@ -2088,6 +2091,10 @@ cmain(uint32_t rom_base)
     ram_detect();
     arena_init();
 #ifndef HOSTTEST
+    /* Every IRQ masked: SYSRET, and STI in the rings, can leave IF set in
+       a test, and nothing here wants an interrupt. */
+    outb(0x21, 0xff);
+    outb(0xa1, 0xff);
     /* The cache may be off (CR0.CD), as a BIOS leaves it for option ROMs,
        and 86Box interprets everything while it is: turn it on for the
        tests. WBINVD exists from the 486 on. */

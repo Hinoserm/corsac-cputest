@@ -85,7 +85,10 @@ pg_reset(const struct variant *v)
    8: the page after it (sandbox + 3000h) not present;
    16: 1 GB up a 4 MB page onto physical 0 (PSE);
    32: the first alias page onto g_smc_page;
-   64: the second page supervisor-only (with g_pg_user). */
+   64: the second page supervisor-only (with g_pg_user);
+   128: the first alias page (1 GB) onto the buffer's second page;
+   256: the alias area's PDE read-only; 512: not present; 1024: not user;
+   2048: the first alias PTE not user; 4096: global (G). */
 static void
 pg_setup(const struct variant *v)
 {
@@ -107,6 +110,19 @@ pg_setup(const struct variant *v)
     }
     if (a & 64)
         *pte_of(s + 0x2000) &= ~PTE_U;
+    uint32_t *pde = (uint32_t *) PG_DIR + (PG_ALIAS_LIN >> 22), *al = (uint32_t *) PG_ALIAS;
+    if (a & 128)
+        al[0] = (s + 0x2000) | PTE_P | PTE_W | g_pg_user;
+    if (a & 256)
+        *pde &= ~PTE_W;
+    if (a & 512)
+        *pde &= ~PTE_P;
+    if (a & 1024)
+        *pde &= ~PTE_U;
+    if (a & 2048)
+        al[0] &= ~PTE_U;
+    if (a & 4096)
+        al[0] |= 0x100;
     pg_flush();
 }
 
@@ -199,7 +215,8 @@ dm_fxarg(const struct variant *v, const struct kin *in, struct kout *d, uint16_t
 
 /* A table of byte sequences run with one page setup each. */
 struct pg_seq {
-    uint8_t setup, defined, len, b[12];
+    uint8_t  setup, defined, len, b[20];
+    uint16_t setup_hi; /* pg_setup bits from 256 up, added to setup */
 };
 
 static void
@@ -216,7 +233,7 @@ pg_run_seqs(const char *name, const struct pg_seq *seqs, unsigned n, uint32_t cr
     for (unsigned i = 0; i < n; i++) {
         memcpy(v.target, seqs[i].b, seqs[i].len);
         v.target_len = seqs[i].len;
-        v.arg3       = seqs[i].setup;
+        v.arg3       = seqs[i].setup | seqs[i].setup_hi;
         v.fx_arg     = seqs[i].defined;
         run_plain(&v, 1);
     }
