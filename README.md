@@ -86,6 +86,7 @@ between versions until the group itself changes.
 | 30 | `lea`         | every 32-bit ModRM form, SIB with every base and every index×scale at each mod, every 16-bit form, displacement edges, ESP as the base |
 | 31 | `alu.mem`     | the eight ALU ops on memory: both directions, 80/81/83 immediates at their edges, every size, LOCK (#UD on CMP), misaligned |
 | 32 | `unary.mem`   | INC DEC NEG NOT TEST, register and memory, every size, LOCK, and the one-byte INC/DEC; INC/DEC after every producer (CF passes through) |
+| 33 | `jcc.loop`    | all 16 Jcc, short and near, after every producer; JECXZ/JCXZ; LOOP/LOOPE/LOOPNE over a real body, 32- and 16-bit counts (CX = 0: 65536 times) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where

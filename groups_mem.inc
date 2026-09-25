@@ -289,3 +289,116 @@ group_unary_mem(void)
     }
     group_end(name);
 }
+
+/* ---- Jcc, JCXZ, LOOP ------------------------------------------------------ */
+
+/* ECX for JECXZ/JCXZ: 0, 1, 10000h (CX zero, ECX not) and FFFFh, then
+   random. */
+static void
+fix_jcxz(const struct variant *v)
+{
+    static const uint32_t edges[] = { 0, 1, 0x10000, 0xffff };
+    int                   e       = edge(4);
+    g_in.ecx                      = e >= 0 ? edges[e] : rnd_operand();
+}
+
+/* The count for LOOP: small edges (and for CX, 0: 65536 times round), then
+   a random small one. EDI a few steps ahead of ESI, where LOOPNE's
+   comparison comes true. arg3 bit 0: 16-bit addressing (CX). */
+static void
+fix_loop(const struct variant *v)
+{
+    static const uint16_t edges32[] = { 1, 2, 3, 7 }, edges16[] = { 1, 2, 0 };
+    int                   a16       = v->arg3 & 1, e = edge(a16 ? 3 : 4);
+    uint32_t              c         = e >= 0 ? (a16 ? edges16[e] : edges32[e]) : 1 + rnd() % 9;
+    g_in.ecx                        = a16 ? (rnd() & 0xffff0000u) | c : c;
+    g_in.edi                        = g_in.esi + 1 + rnd() % 4;
+}
+
+/* LOOP's body ends in INC (CF passes through) or CMP (every flag). */
+static int
+dm_loop(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    if (v->fx_arg)
+        *undef = 0;
+    else
+        *undef &= F_CF;
+    return 1;
+}
+
+static void
+group_jcc_loop(void)
+{
+    const char    *name = "jcc.loop";
+    struct variant v    = { .group = name, .fx = FX_SETCC };
+    group_begin(name);
+    /* jcc +2; mov al, 1: AL is 1 only if the branch was not taken. */
+    for (int cc = 0; cc < 16; cc++) {
+        for (int near = 0; near < 2; near++) {
+            int n = 0;
+            if (near) {
+                v.target[n++] = 0x0f;
+                v.target[n++] = 0x80 | cc;
+                put_le(v.target + n, 2, 4);
+                n += 4;
+            } else {
+                v.target[n++] = 0x70 | cc;
+                v.target[n++] = 0x02;
+            }
+            v.target[n++] = 0xb0;
+            v.target[n++] = 0x01;
+            v.target_len  = n;
+            v.fx_arg      = cc;
+            run_flags(&v, 1);
+        }
+    }
+    /* JECXZ and JCXZ */
+    {
+        static const struct {
+            uint8_t len, b[5];
+        } seqs[] = { { SEQ(0xe3, 0x02, 0xb0, 0x01) }, { SEQ(0x67, 0xe3, 0x02, 0xb0, 0x01) } };
+        v.fx        = FX_NONE;
+        v.fix_input = fix_jcxz;
+        v.reg_fix   = 1;
+        for (int i = 0; i < 2; i++) {
+            memcpy(v.target, seqs[i].b, seqs[i].len);
+            v.target_len = seqs[i].len;
+            run_keep(&v, 5);
+        }
+    }
+    /* LOOP, LOOPE, LOOPNE, backwards over a real body, 32- and 16-bit
+       counts. */
+    {
+        static const struct {
+            uint8_t cmp, len, b[6];
+        } seqs[] = {
+            { 0, SEQ(0x46, 0xe2, 0xfd) },             /* L: inc esi; loop L */
+            { 1, SEQ(0x46, 0x39, 0xc0, 0xe1, 0xfb) }, /* L: inc esi; cmp eax, eax; loope L (runs out) */
+            { 1, SEQ(0x46, 0x39, 0xfe, 0xe1, 0xfb) }, /* L: inc esi; cmp esi, edi; loope L (leaves at once) */
+            { 1, SEQ(0x46, 0x39, 0xfe, 0xe0, 0xfb) }, /* L: inc esi; cmp esi, edi; loopne L (leaves when equal) */
+        };
+        v.fx        = FX_CUSTOM;
+        v.defmask   = dm_loop;
+        v.fix_input = fix_loop;
+        for (int a16 = 0; a16 < 2; a16++) {
+            for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+                int n = 0;
+                if (a16) { /* the prefix goes on the LOOP instruction itself */
+                    memcpy(v.target, seqs[i].b, seqs[i].len - 2);
+                    n             = seqs[i].len - 2;
+                    v.target[n++] = 0x67;
+                    v.target[n++] = seqs[i].b[seqs[i].len - 2];
+                    v.target[n++] = seqs[i].b[seqs[i].len - 1] - 1; /* one byte further back */
+                } else {
+                    memcpy(v.target, seqs[i].b, seqs[i].len);
+                    n = seqs[i].len;
+                }
+                v.target_len = n;
+                v.fx_arg     = seqs[i].cmp;
+                v.arg3       = a16;
+                run_keep(&v, a16 ? 4 : 5);
+            }
+        }
+    }
+    group_end(name);
+}
