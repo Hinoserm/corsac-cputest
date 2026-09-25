@@ -97,7 +97,7 @@ goes into the group that already covers it, not into a group of its own.
 | 197 | `msr.map` | which MSRs a model has (P5 test registers and counters, AMD K5/K6, IDT, P6): whether RDMSR faults, values cleared; the P6's L2, SYSENTER, counter, LBR, MTRR, PAT and MC bank MSRs, WinChip MCR, Cyrix III FCR, and the TSC with high ECX bits (an alias or #GP) |
 | 198 | `msr.write` | WRMSR to the TSC with the upper half set, read back: which models write all 64 bits; RDMSR of the TSC agrees with RDTSC; on a P6, #GP for WRMSR to MTRRcap, MCG_CAP, an LBR MSR and a reserved MTRR type, and PerfCtr0 sign-extending 32 bits to 40 |
 | 199 | `cyrix.dir` | the Cyrix DIR0/DIR1 and CCR0-3 through ports 22h/23h, only on a CPU the 5/2 test or CPUID calls a Cyrix |
-| 200 | `pg.basic`    | with paging on (identity map, 4 KB pages): loads, stores, RMW, XADD/XCHG and PUSH/POP to memory, misaligned across a page boundary |
+| 200 | `pg.basic`    | with paging on (identity map, 4 KB pages): loads, stores, RMW, XADD/XCHG and PUSH/POP to memory, misaligned across a page boundary; PAE paging (Pentium Pro on) with WP: reads, writes and their A/D bits in the 64-bit PTE, a missing, a read-only and a reserved-bit page (RSVD), a 2 MB page and its PDE |
 | 201 | `pg.notpresent` | #PF from a missing page: loads, stores, RMW, LOCK, PUSH/POP to memory; error code and CR2 (RMW forms raw only); the alias page through a missing PDE, and through a present PDE and missing PTE |
 | 202 | `pg.readonly.wp0` | a read-only page with CR0.WP clear: supervisor writes go through; CMPXCHG (equal and not), CMPXCHG8B, XADD, locked BTS/ADD and BT; the alias page through a read-only PDE |
 | 203 | `pg.readonly.wp1` | the same with CR0.WP set: supervisor writes fault (486 on) |

@@ -178,6 +178,111 @@ pg_end(const char *name)
     group_end(name);
 }
 
+/* PAE (CR4.PAE, the Pentium Pro on): a page-directory-pointer table at
+   PAE_PDPT, one page directory for the first GB in 2 MB pages, but the
+   2 MB around the sandbox in 4 KB pages (PAE_PT), all identity, with
+   CR0.WP. Each run builds the tables afresh and switches paging to them,
+   and back to the 32-bit tables after. arg3: 1 the buffer's second page
+   not present, 4 read-only, 8 with a reserved bit (40) set. */
+#define PAE_PDPT 0x250000u
+#define PAE_PD   0x251000u
+#define PAE_PT   0x252000u
+#define CR4_PAE  (1u << 5)
+#define CPUID_PAE (1u << 6)
+
+#ifndef HOSTTEST
+static uint32_t *
+pae_pte(uint32_t lin)
+{
+    return (uint32_t *) PAE_PT + ((lin - 0x200000) >> 12) * 2;
+}
+
+static void
+pae_before(const struct variant *v)
+{
+    uint32_t *pdpt = (uint32_t *) PAE_PDPT, *pd = (uint32_t *) PAE_PD, *pt = (uint32_t *) PAE_PT;
+    uint32_t  s    = (uint32_t) SANDBOX, cr0, cr4;
+    for (int i = 0; i < 8; i++)
+        pdpt[i] = 0;
+    pdpt[0] = PAE_PD | PTE_P;
+    for (int i = 0; i < 512; i++) {
+        pd[2 * i]     = (i << 21) | PTE_P | PTE_W | PDE_PS;
+        pd[2 * i + 1] = 0;
+        pt[2 * i]     = (0x200000 + (i << 12)) | PTE_P | PTE_W;
+        pt[2 * i + 1] = 0;
+    }
+    pd[2] = PAE_PT | PTE_P | PTE_W; /* 200000h-3FFFFFh in 4 KB pages */
+    uint32_t *e = pae_pte(s + 0x2000);
+    if (v->arg3 & 1)
+        e[0] &= ~PTE_P;
+    if (v->arg3 & 4)
+        e[0] &= ~PTE_W;
+    if (v->arg3 & 8)
+        e[1] |= 1u << 8;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    __asm__ volatile("mov %0, %%cr0\n\tjmp 1f\n1:" : : "r"(cr0 & ~CR0_PG) : "memory");
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 | CR4_PAE));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(PAE_PDPT) : "memory");
+    __asm__ volatile("mov %0, %%cr0\n\tjmp 1f\n1:" : : "r"(cr0 | CR0_PG | CR0_WP) : "memory");
+}
+
+static void
+pae_after(const struct variant *v)
+{
+    uint32_t cr0, cr4;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    __asm__ volatile("mov %0, %%cr0\n\tjmp 1f\n1:" : : "r"(cr0 & ~(CR0_PG | CR0_WP)) : "memory");
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4 & ~CR4_PAE));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(PG_DIR) : "memory");
+    __asm__ volatile("mov %0, %%cr0\n\tjmp 1f\n1:" : : "r"(cr0 & ~CR0_WP) : "memory");
+    pg_reset(v);
+}
+#endif
+
+static void
+pg_pae(const char *name)
+{
+#ifndef HOSTTEST
+    struct variant v   = { .group = name, .paging = 1, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF,
+                           .before_run = pae_before, .after_run = pae_after };
+    uint32_t       pte = (uint32_t) pae_pte((uint32_t) SANDBOX + 0x2000);
+    if (!(g_cpu.features & CPUID_PAE))
+        return;
+    static const struct {
+        uint8_t setup, pte, len, b[8];
+    } seqs[] = {
+        { 0, 1, SEQ(0x8b, 0x43, 0x18) }, /* mov eax, [ebx+24]: then the PTE (A) */
+        { 0, 1, SEQ(0x89, 0x4b, 0x18) }, /* mov [ebx+24], ecx: D */
+        { 0, 0, SEQ(0x8b, 0x43, 0x16) }, /* across the page boundary */
+        { 1, 0, SEQ(0x8b, 0x43, 0x18) }, /* not present */
+        { 4, 0, SEQ(0x89, 0x4b, 0x18) }, /* read-only: #PF with WP */
+        { 4, 0, SEQ(0x8b, 0x43, 0x18) },
+        { 8, 0, SEQ(0x8b, 0x43, 0x18) }, /* a reserved bit: #PF, RSVD in the error code */
+        { 0, 2, SEQ(0xa1, 0x10, 0x00, 0x60, 0x00, 0x31, 0xc0) }, /* a 2 MB page, then its PDE (A) */
+    };
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        int n = seqs[i].len;
+        memcpy(v.target, seqs[i].b, n);
+        if (seqs[i].pte) {
+            uint32_t at = seqs[i].pte == 1 ? pte : PAE_PD + 3 * 8;
+            v.target[n++] = 0x8b; /* mov esi, [entry]; mov edi, [entry+4] */
+            v.target[n++] = 0x35;
+            put_le(v.target + n, at, 4);
+            n += 4;
+            v.target[n++] = 0x8b;
+            v.target[n++] = 0x3d;
+            put_le(v.target + n, at + 4, 4);
+            n += 4;
+        }
+        v.target_len = n;
+        v.arg3       = seqs[i].setup;
+        run_plain(&v, 1);
+    }
+#endif
+}
+
 /* Ordinary memory work with paging on: loads, stores, read-modify-write,
    a misaligned dword across the page boundary in the buffer, string
    moves, PUSH/POP. */
@@ -209,6 +314,7 @@ group_pg_basic(void)
         v.target_len = seqs[i].len;
         run_plain(&v, 2);
     }
+    pg_pae(name);
     pg_end(name);
 }
 
