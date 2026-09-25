@@ -398,7 +398,7 @@ static void (*const groups[])(void) = {
     group_cmov, group_rdtsc, group_nop_p6, group_smc,
     group_segments, group_exhaust8, group_lea,
     group_alu_mem, group_unary_mem, group_jcc_loop,
-    group_mov_forms,
+    group_mov_forms, group_prefixes,
 };
 
 /* Each group twice: counted first, so the status line knows how many are

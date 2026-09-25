@@ -493,3 +493,48 @@ group_mov_forms(void)
     }
     group_end(name);
 }
+
+/* ---- prefixes -------------------------------------------------------------- */
+
+/* Repeated and ignored prefixes, prefix order, and the 15-byte limit on an
+   instruction's length (#GP past it). */
+static void
+group_prefixes(void)
+{
+    static const struct {
+        uint8_t mem, len, b[17];
+    } seqs[] = {
+        { 0, SEQ(0x66, 0x66, 0x01, 0xd1) },                         /* add cx, dx: the prefix twice */
+        { 0, SEQ(0x66, 0x67, 0x66, 0x8d, 0x00) },                   /* lea ax, [bx+si], prefixes mixed */
+        { 0, SEQ(0xf3, 0x01, 0xd1) },                               /* REP on ADD: ignored */
+        { 0, SEQ(0xf2, 0x0f, 0xaf, 0xc1) },                         /* REPNE on IMUL: ignored */
+        { 1, SEQ(0x2e, 0x3e, 0x26, 0x8b, 0x03) },                   /* three segment overrides, all flat */
+        { 1, SEQ(0x64, 0x65, 0x66, 0x8b, 0x03) },                   /* FS: GS: then o16 */
+        { 1, SEQ(0x66, 0xf0, 0x01, 0x13) },                         /* o16 before LOCK: lock add [ebx], dx */
+        { 1, SEQ(0xf0, 0x66, 0x01, 0x13) },                         /* LOCK before o16 */
+        { 0, SEQ(0x2e, 0x74, 0x02, 0xb0, 0x01) },                   /* branch hint: CS on JZ */
+        { 0, SEQ(0x3e, 0x75, 0x02, 0xb0, 0x01) },                   /* branch hint: DS on JNZ */
+        { 0, SEQ(0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+                 0x66, 0x66, 0x66, 0x66, 0x66, 0x01, 0xd1) },       /* 15 bytes exactly: runs */
+        { 0, SEQ(0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+                 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x01, 0xd1) }, /* 16 bytes: #GP */
+    };
+    const char    *name = "prefixes";
+    struct variant v    = { .group = name, .faults_ok = 1, .arg = MEM_OFF };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
+        memcpy(v.target, seqs[i].b, seqs[i].len);
+        v.target_len = seqs[i].len;
+        v.fix_input  = seqs[i].mem ? fix_mem_ebx : 0;
+        /* The branch hints read ZF: every producer. */
+        if (seqs[i].b[1] == 0x74 || seqs[i].b[1] == 0x75) {
+            v.fx     = FX_SETCC;
+            v.fx_arg = seqs[i].b[1] & 15;
+            run_flags(&v, 1);
+        } else {
+            v.fx = FX_NONE;
+            run_plain(&v, 2);
+        }
+    }
+    group_end(name);
+}
