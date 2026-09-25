@@ -680,3 +680,42 @@ group_sgdt_forms(void)
     }
     group_end(name);
 }
+
+/* ---- EFLAGS through IRETD ----------------------------------------------------------------- */
+
+/* IRETD at CPL 0 to the next instruction with an EFLAGS image (arg3)
+   carrying IOPL, AC, ID, RF, VIF and VIP (never VM, NT or TF), then
+   PUSHFD: which of them the model keeps. */
+static void
+emit_iretf(struct emit *e, const struct variant *v)
+{
+    e8(e, 0x68); /* push flags image */
+    e32(e, v->arg3);
+    e8(e, 0x0e); /* push cs */
+    e8(e, 0x68); /* push L */
+    uint8_t *l = e->p;
+    e32(e, 0);
+    e8(e, 0xcf); /* iretd */
+    put32_at(l, (uint32_t) e->p);
+    e8(e, 0x9c); /* L: pushfd; pop esi */
+    e8(e, 0x5e);
+}
+
+static void
+group_iret_flags(void)
+{
+    static const uint32_t images[] = { 0x00000002, 0x00003002, 0x00040002, 0x00200002, 0x00010002,
+                                       0x00180002, 0x00043cd7, 0x003c3cd7 };
+    const char           *name     = "iret.flags";
+    struct variant        v        = { .group = name, .faults_ok = 1, .emit = emit_iretf, .flags_mask = 0x003f3cd5,
+                                       .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 0 };
+    group_begin(name);
+    for (unsigned i = 0; i < sizeof(images) / sizeof(images[0]); i++) {
+        v.target[0]  = 0xcf; /* for the reports */
+        put_le(v.target + 1, images[i], 4);
+        v.target_len = 5;
+        v.arg3       = images[i];
+        run_plain(&v, 1);
+    }
+    group_end(name);
+}

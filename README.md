@@ -187,6 +187,7 @@ between versions until the group itself changes.
 | 288 | `code16.limit` | 16-bit code running up to the end of its 64 KB segment, and one or two bytes past it (#GP) |
 | 289 | `code16.opsize` | 66 and 67 in 16-bit code: CALL rel32 and o32 RET, PUSH imm by size, LOOP by ECX and by CX, PUSHFD |
 | 290 | `sgdt.forms` | SGDT and SIDT with 32- and 16-bit operands, SLDT and STR to 32- and 16-bit registers and memory |
+| 291 | `iret.flags` | IRETD at CPL 0 with EFLAGS images carrying IOPL, AC, ID, RF, VIF and VIP: which of them stick |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
