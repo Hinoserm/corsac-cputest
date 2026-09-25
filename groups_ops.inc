@@ -1422,12 +1422,12 @@ group_int(void)
        #UD, #GP from a null FS, #DE, #BR. Raw only: the manuals disagree
        across models. */
     static const struct {
-        uint8_t len, b[12];
+        uint8_t len, b[16];
     } rf[] = {
         { SEQ(0x0f, 0x0b) },                                                /* ud2 */
         { SEQ(0x66, 0xb8, 0x00, 0x00, 0x8e, 0xe0, 0x64, 0x8b, 0x00) },      /* fs = 0; mov eax, fs:[eax] */
         { SEQ(0x31, 0xc9, 0xf7, 0xf1) },                                    /* div ecx by 0 */
-        { SEQ(0xc7, 0x03, 0x05, 0, 0, 0, 0xc7, 0x43, 0x04, 0x01, 0, 0) },  /* bounds 5..1 */
+        { SEQ(0xc7, 0x03, 0x05, 0, 0, 0, 0xc7, 0x43, 0x04, 0x01, 0, 0, 0) }, /* bounds 5..1 */
     };
     v.flags_mask = 0x10cd5;
     v.defmask    = dm_fxarg;
