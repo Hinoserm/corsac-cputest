@@ -486,6 +486,7 @@ static const struct group_def groups[] = {
     G(group_r1_ss),
     G(group_conforming),
     G(group_intgate),
+    G(group_r1_inner),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
