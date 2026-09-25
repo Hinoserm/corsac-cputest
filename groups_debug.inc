@@ -6,7 +6,7 @@
  * DR6.BS missing after a TF trap broke HX's debugger). Each variant runs
  * with its breakpoints loaded just before and cleared just after, and
  * its result includes DR6 (in fault_err). Included into groups.inc after
- * groups_ring2.inc; append only.
+ * groups_ring2.inc.
  */
 
 #define CPUID_DE   (1u << 2)
@@ -273,7 +273,7 @@ group_dr_data(void)
         { SEQ(0x89, 0x4b, 0x08) },       /* mov [ebx+8], ecx: past a 4-byte one */
         { SEQ(0x8b, 0x43, 0x04) },       /* mov eax, [ebx+4]: a read */
         { SEQ(0x01, 0x4b, 0x04) },       /* add [ebx+4], ecx: read and write */
-        { SEQ(0xff, 0x73, 0x04) },       /* push dword [ebx+4] */
+        { SEQ(0xff, 0x73, 0x04, 0x5e) }, /* push dword [ebx+4]; pop esi */
     };
     static const uint32_t kinds[] = { 0x1, 0x3 };        /* RW: write; read or write */
     static const uint32_t lens[]  = { 0x0, 0x1, 0x3 };   /* LEN: 1, 2, 4 bytes */
