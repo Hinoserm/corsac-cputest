@@ -261,6 +261,13 @@ cpu_detect(void)
             g_cpu.signature = a;
             g_cpu.features  = d;
         }
+        /* Extended leaves (3DNow!). Older Intel CPUs answer an unknown
+           leaf with a basic one, which has bit 31 of EAX clear. */
+        cpuid(0x80000000, &a, &b, &c, &d);
+        if ((a & 0x80000000u) && a >= 0x80000001u && a < 0x80000100u) {
+            cpuid(0x80000001, &a, &b, &c, &d);
+            g_cpu.ext_features = d;
+        }
     }
 }
 
@@ -527,7 +534,7 @@ typedef int (*defmask_fn)(const struct variant *v, const struct kin *in, struct 
 
 struct variant {
     const char   *group;
-    uint8_t       target[16];
+    uint8_t       target[48];
     uint8_t       target_len;
     uint8_t       producer;
     uint8_t       boundary;
@@ -542,6 +549,7 @@ struct variant {
     uint8_t       faults_ok;     /* a fault is a result like any other */
     uint8_t       norm;          /* registers (1 << ModRM number) holding sandbox addresses */
     uint8_t       reg_fix;       /* fix_input sets registers only: no sandbox refill */
+    uint8_t       mmx;           /* MM0-MM7 loaded from g_mmx_in, stored to g_mmx_out */
     void        (*emit)(struct emit *e, const struct variant *v); /* instead of target[] */
     defmask_fn    defmask;
 };
@@ -690,6 +698,12 @@ fill_input(void)
 #define STACK_TOP (g_buf + 0x800)
 uint32_t g_stack_save, g_stack_out;
 
+/* MMX variants: MM0-MM7 in and out (as 32-bit halves, low first), and
+   where FNSTENV goes (outside the sandbox: it holds absolute addresses). */
+uint32_t g_mmx_in[16], g_mmx_out[16];
+uint32_t g_fenv[7];
+static uint32_t g_mmx_runs[4][16];
+
 static void
 capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem)
 {
@@ -702,6 +716,8 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
     memcpy(o->buf, g_buf, BUF_SIZE);
     memcpy(o->lowbuf, LOWBUF, LOWBUF_SIZE);
     o->sandbox_crc = mem ? crc_add(0, SANDBOX, SANDBOX_SIZE) : 0;
+    if (v->mmx) /* the MMX registers count as memory */
+        o->sandbox_crc = crc_add(o->sandbox_crc, g_mmx_out, sizeof(g_mmx_out));
     if (vec != 0xff) {
         /* The registers at the fault, not the (unwritten) output record. */
         o->eax      = g_fault.eax;
@@ -791,6 +807,21 @@ report_mismatch(const struct variant *v, const struct kin *in, const struct kout
             puts_("\n");
         }
     }
+    if (v->mmx) {
+        for (int r = 0; r < RUNS; r++) {
+            puts_("    run ");
+            putdec(r + 1);
+            puts_(" mm0-7");
+            for (int i = 7; i >= 0; i--) {
+                putch(' ');
+                puthex(g_mmx_runs[r][2 * i + 1], 8);
+                puthex(g_mmx_runs[r][2 * i], 8);
+                if (i == 4)
+                    puts_("\n              ");
+            }
+            puts_("\n");
+        }
+    }
     for (int r = 0; r < RUNS; r++) {
         if (out[r].sandbox_crc != out[0].sandbox_crc || r == 0) {
             puts_("    run ");
@@ -810,6 +841,9 @@ run_variant(const struct variant *v)
     struct kin  in;
 
     fill_input();
+    if (v->mmx)
+        for (int i = 0; i < 16; i++)
+            g_mmx_in[i] = rnd_operand();
     g_skip = 0;
     if (v->fix_input)
         v->fix_input(v);
@@ -822,7 +856,7 @@ run_variant(const struct variant *v)
     in = g_in;
 
     int         big  = v->emit || v->stack;
-    uint8_t    *slot = arena_alloc(big ? 256 : 160);
+    uint8_t    *slot = arena_alloc(v->mmx ? 384 : big ? 256 : 160);
     struct emit e    = { slot };
     emit_prologue(&e);
     if (v->stack) {
@@ -831,6 +865,16 @@ run_variant(const struct variant *v)
         e32(&e, (uint32_t) &g_stack_save);
         e8(&e, 0xbc); /* mov esp, STACK_TOP */
         e32(&e, (uint32_t) STACK_TOP);
+    }
+    if (v->mmx) {
+        e8(&e, 0xdb); /* fninit: the same x87 state every time */
+        e8(&e, 0xe3);
+        for (int i = 0; i < 8; i++) {
+            e8(&e, 0x0f); /* movq mmI, [g_mmx_in + 8*I] */
+            e8(&e, 0x6f);
+            e8(&e, 0x05 | (i << 3));
+            e32(&e, (uint32_t) &g_mmx_in[2 * i]);
+        }
     }
     ebytes(&e, producers[v->producer].bytes, producers[v->producer].len);
     if (v->boundary) {
@@ -841,6 +885,16 @@ run_variant(const struct variant *v)
         v->emit(&e, v);
     else
         ebytes(&e, v->target, v->target_len);
+    if (v->mmx) {
+        for (int i = 0; i < 8; i++) {
+            e8(&e, 0x0f); /* movq [g_mmx_out + 8*I], mmI */
+            e8(&e, 0x7f);
+            e8(&e, 0x05 | (i << 3));
+            e32(&e, (uint32_t) &g_mmx_out[2 * i]);
+        }
+        e8(&e, 0x0f); /* emms */
+        e8(&e, 0x77);
+    }
     if (v->stack) {
         e8(&e, 0x89); /* mov [g_stack_out], esp */
         e8(&e, 0x25);
@@ -861,8 +915,11 @@ run_variant(const struct variant *v)
         memcpy(g_buf, in.buf, BUF_SIZE);
         memcpy(LOWBUF, in.lowbuf, LOWBUF_SIZE);
         memset(&g_out, 0, sizeof(g_out));
+        memset(g_mmx_out, 0, sizeof(g_mmx_out));
         int vec = run_kernel(slot);
         capture(v, &out[r], slot, vec, mem);
+        if (v->mmx)
+            memcpy(g_mmx_runs[r], g_mmx_out, sizeof(g_mmx_out));
     }
 
     g_stats.tests++;

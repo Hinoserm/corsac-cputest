@@ -8,7 +8,7 @@ It runs with no OS at all, from either of these:
 - **`cputest.img`**: a 16 MB disk image. Write it to a CF card or hard disk
   and boot it. The boot sector loads the test and calls it the way a BIOS
   calls an option ROM.
-- **`build/cputest.rom`**: the same test as a 32 KB option ROM, for an ISA
+- **`build/cputest.rom`**: the same test as a 64 KB option ROM, for an ISA
   ROM card at C8000h (86Box: *Generic ISA ROM Board*).
 
 Output goes to COM1 at 115200 8N1, and to the screen. The top line of the
@@ -74,11 +74,19 @@ so their CRCs stay comparable across versions. New groups only go at the end.
 | 18 | `int.ud`      | INT3, INT n, INTO, ICEBP, INT past the IDT (#GP), invalid encodings (#UD) |
 | 19 | `bound.arpl`  | BOUND inside, on and outside the bounds (#BR), ARPL             |
 | 20 | `misc`        | XLAT, CMC CLC STC CLD STD, WAIT, PAUSE, XCHG with memory        |
+| 21 | `mmx`         | every MMX instruction: arithmetic, packs, compares, shifts by register and immediate (with the #UD holes), MOVD/MOVQ |
+| 22 | `mmx.x87`     | EMMS and the x87 tag and status words after MMX, EMMS and FLD   |
+| 23 | `3dnow`       | 3DNow! and the K6-2+/K6-III+ extensions, FEMMS, PREFETCH(W)     |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
 it happened all go into the CRCs. Groups that need something the CPU lacks
-(a 486, CMPXCHG8B) say so and are skipped.
+(a 486, CMPXCHG8B, MMX, 3DNow!) say so and are skipped.
+
+In the 3DNow! group, only the exact operations go into `crc_defined`:
+compares, min/max, truncating conversions, PMULHRW, PAVGUSB and PSWAPD.
+Additions, multiplies and reciprocal estimates round differently on a K6-2
+and an Athlon, so they're in `crc_raw` only.
 
 The test never uses LOCK CMPXCHG8B with a register operand. That's the
 Pentium F00F erratum, and it would hang the machine.

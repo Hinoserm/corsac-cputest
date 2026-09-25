@@ -16,6 +16,7 @@ struct cpu_info {
     int      is486, has_cpuid;
     char     vendor[13];
     uint32_t signature, features;
+    uint32_t ext_features; /* CPUID 80000001h EDX, 0 without it */
 };
 
 /* What a test starts from. */

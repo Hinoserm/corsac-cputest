@@ -35,12 +35,18 @@ start:
         test    cl, 1
         jz      chs
 
-        ; One extended read of the whole image.
+        ; Extended reads, 32 sectors at a time: some BIOSes take no more
+        ; than 127 in one call.
+.ext:
         mov     si, dap
         mov     ah, 0x42
         mov     dl, [drive]
         int     0x13
         jc      chs
+        add     word [dap + 6], 32 * 512 / 16   ; next segment
+        add     word [dap + 8], 32              ; next LBA
+        sub     word [left], 32
+        ja      .ext
         jmp     loaded
 
 chs:
@@ -117,10 +123,12 @@ heads   dw 0
 lba     dw 0
 dest    dw 0
 
+left    dw IMAGE_SECTORS
+
         align 4
 dap:
         db      0x10, 0
-        dw      IMAGE_SECTORS
+        dw      32
         dw      0, LOAD_SEG             ; offset, segment
         dq      1                       ; from LBA 1
 
