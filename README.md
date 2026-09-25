@@ -160,6 +160,7 @@ between versions until the group itself changes.
 | 261 | `dr.alias` | DR4/DR5 as DR6/DR7 with CR4.DE clear, #UD with it set |
 | 262 | `dr.io` | I/O breakpoints (CR4.DE, RW=10) on port 80h by OUT imm8, OUT DX and OUTSB; another port; RW=10 without DE (raw) |
 | 263 | `dr.bits` | what DR6 and DR7 read back after all zeros and all ones, and DR0/DR3 round trips (raw) |
+| 264 | `cr0.write` | each CR0 flag set or cleared alone and read back; NW without CD (#GP); CD with and without NW; reserved bits (raw) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -313,7 +314,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_paging.inc` | groups 200-210: paging                                  |
 | `groups_ring.inc` | groups 211-241: rings 1-3 and V86 mode                   |
 | `groups_ring2.inc` | groups 242-254: limits, stacks, gates, 16-bit code in rings |
-| `groups_debug.inc` | groups 255 on: single-step and the debug registers         |
+| `groups_debug.inc` | groups 255-263: single-step and the debug registers      |
+| `groups_sys.inc` | groups 264 on: control registers                           |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |
