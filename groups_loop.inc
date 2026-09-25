@@ -135,6 +135,14 @@ static const struct loop_def {
     { "loop.paddb", LK_MMX, 64, 0x001, SEQ(0x0f, 0xfc, 0xc1) },
     { "loop.paddw", LK_MMX, 64, 0x001, SEQ(0x0f, 0xfd, 0xc1) },
     { "loop.paddd", LK_MMX, 64, 0x001, SEQ(0x0f, 0xfe, 0xc1) },
+    { "loop.psrlw", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xd1, 0xc1) },
+    { "loop.psrld", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xd2, 0xc1) },
+    { "loop.psrlq", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xd3, 0xc1) },
+    { "loop.psraw", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xe1, 0xc1) },
+    { "loop.psrad", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xe2, 0xc1) },
+    { "loop.psllw", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xf1, 0xc1) },
+    { "loop.pslld", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xf2, 0xc1) },
+    { "loop.psllq", LK_MMXSH, 64, 0x001, SEQ(0x0f, 0xf3, 0xc1) },
 };
 
 #define LOOP_N 4096
@@ -423,4 +431,5 @@ GA(group_loop, 84), GA(group_loop, 85), GA(group_loop, 86), GA(group_loop, 87), 
 GA(group_loop, 90), GA(group_loop, 91), GA(group_loop, 92), GA(group_loop, 93), GA(group_loop, 94), GA(group_loop, 95), \
 GA(group_loop, 96), GA(group_loop, 97), GA(group_loop, 98), GA(group_loop, 99), GA(group_loop, 100), GA(group_loop, 101), \
 GA(group_loop, 102), GA(group_loop, 103), GA(group_loop, 104), GA(group_loop, 105), GA(group_loop, 106), GA(group_loop, 107), \
-GA(group_loop, 108), GA(group_loop, 109),
+GA(group_loop, 108), GA(group_loop, 109), GA(group_loop, 110), GA(group_loop, 111), GA(group_loop, 112), GA(group_loop, 113), \
+GA(group_loop, 114), GA(group_loop, 115), GA(group_loop, 116), GA(group_loop, 117),
