@@ -52,3 +52,45 @@ group_cmov(void)
     }
     group_end(name);
 }
+
+/* RDTSC twice: the difference must be positive and under 2^28 (the second
+   read can't come before the first, nor a second or so later). The code
+   turns that into EAX = 1 and zeroes everything else it used, so every run
+   gives the same result. Pentium on (CPUID TSC). */
+static void
+group_rdtsc(void)
+{
+    static const uint8_t seq[] = {
+        0x0f, 0x31,                   /* rdtsc */
+        0x89, 0xc6,                   /* mov esi, eax */
+        0x89, 0xd7,                   /* mov edi, edx */
+        0x0f, 0x31,                   /* rdtsc */
+        0x29, 0xf0,                   /* sub eax, esi */
+        0x19, 0xfa,                   /* sbb edx, edi: EDX:EAX = the difference */
+        0x85, 0xd2,                   /* test edx, edx */
+        0x0f, 0x94, 0xc1,             /* setz cl */
+        0x3d, 0x00, 0x00, 0x00, 0x10, /* cmp eax, 10000000h */
+        0x0f, 0x92, 0xc5,             /* setb ch */
+        0x83, 0xf8, 0x01,             /* cmp eax, 1 */
+        0x0f, 0x93, 0xc2,             /* setae dl */
+        0x20, 0xe9,                   /* and cl, ch */
+        0x20, 0xd1,                   /* and cl, dl */
+        0x0f, 0xb6, 0xc1,             /* movzx eax, cl */
+        0x31, 0xd2,                   /* xor edx, edx */
+        0x31, 0xf6,                   /* xor esi, esi */
+        0x31, 0xff,                   /* xor edi, edi */
+        0x31, 0xc9,                   /* xor ecx, ecx */
+    };
+    const char    *name = "rdtsc";
+    struct variant v    = { .group = name };
+
+    if (!(g_cpu.features & CPUID_TSC)) {
+        group_skip(name, "no TSC");
+        return;
+    }
+    group_begin(name);
+    memcpy(v.target, seq, sizeof(seq));
+    v.target_len = sizeof(seq);
+    run_ctx(&v, ctx_some, 3, 8);
+    group_end(name);
+}

@@ -78,11 +78,12 @@ so their CRCs stay comparable across versions. New groups only go at the end.
 | 22 | `mmx.x87`     | EMMS and the x87 tag and status words after MMX, EMMS and FLD   |
 | 23 | `3dnow`       | 3DNow! and the K6-2+/K6-III+ extensions, FEMMS, PREFETCH(W)     |
 | 24 | `cmov`        | CMOVcc, all conditions, 16/32-bit, register and memory, after every producer (P6 on) |
+| 25 | `rdtsc`       | two RDTSCs back to back: the difference is positive and small (Pentium on) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
 it happened all go into the CRCs. Groups that need something the CPU lacks
-(a 486, CMPXCHG8B, MMX, 3DNow!, CMOV) say so and are skipped.
+(a 486, CMPXCHG8B, MMX, 3DNow!, CMOV, TSC) say so and are skipped.
 
 In the 3DNow! group, only the exact operations go into `crc_defined`:
 compares, min/max, truncating conversions, PMULHRW, PAVGUSB and PSWAPD.
