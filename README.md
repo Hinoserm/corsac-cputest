@@ -134,6 +134,7 @@ between versions until the group itself changes.
 | 235 | `r2.basic` | code and I/O checks at CPL 2 |
 | 236 | `r2.gates` | call gates and far transfers from ring 2, including the DPL-2 gate into ring 1 |
 | 237 | `v86.basic` | V86 mode at IOPL 3: 16-bit and 32-bit arithmetic, segment arithmetic, the stack, PUSHF, CLI; what stays privileged |
+| 238 | `v86.iopl0` | V86 at IOPL 0 without VME: CLI STI PUSHF POPF INT IRET #GP, ports by the bitmap |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
