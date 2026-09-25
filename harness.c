@@ -437,7 +437,7 @@ emit_prologue(struct emit *e)
 }
 
 static void
-emit_epilogue(struct emit *e)
+emit_epilogue(struct emit *e, int reset_flags)
 {
     e8(e, 0x9c); /* pushfd */
     e8(e, 0x8f); /* pop dword [abs] */
@@ -448,6 +448,11 @@ emit_epilogue(struct emit *e)
         e8(e, 0x89); /* mov [abs], r32 */
         e8(e, 0x05 | (order[i] << 3));
         e32(e, (uint32_t) out_reg(order[i]));
+    }
+    if (reset_flags) {
+        e8(e, 0x6a); /* push 2; popfd: no NT, AC, ID or IOPL left for the harness */
+        e8(e, 0x02);
+        e8(e, 0x9d);
     }
     e8(e, 0xc3);
 }
@@ -509,8 +514,16 @@ enum {
     FX_LAHF_SAHF, /* fx_arg = the sequence, see lahf_sahf_effect() */
     FX_BT,    /* CF defined, the others undefined */
     FX_ALU,   /* fx_arg = the ALU operation, 0-7 */
-    FX_UNDEF  /* the result itself is undefined (BSWAP r16) */
+    FX_UNDEF, /* the result itself is undefined (BSWAP r16) */
+    FX_CUSTOM /* the variant's defmask() decides, from the input */
 };
+
+struct emit;
+struct variant;
+/* Given the input and the producer's undefined flags in *undef, leave in
+   *undef what is undefined after the test and clear any undefined
+   registers in *d. Returns 0 if nothing of the result is defined. */
+typedef int (*defmask_fn)(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef);
 
 struct variant {
     const char   *group;
@@ -522,6 +535,15 @@ struct variant {
     uint32_t      arg; /* for fix_input */
     uint8_t       fx, fx_arg;
     uint8_t       no_ref; /* depends on this machine (ESP, low buffer): not in the defined CRC */
+    /* The rest are zero in the first six groups. */
+    uint32_t      arg2, arg3;    /* for fix_input and defmask */
+    uint32_t      flags_mask;    /* EFLAGS bits compared; 0 = the arithmetic flags and DF */
+    uint8_t       stack;         /* runs on a private stack in the sandbox */
+    uint8_t       faults_ok;     /* a fault is a result like any other */
+    uint8_t       norm;          /* registers (1 << ModRM number) holding sandbox addresses */
+    uint8_t       reg_fix;       /* fix_input sets registers only: no sandbox refill */
+    void        (*emit)(struct emit *e, const struct variant *v); /* instead of target[] */
+    defmask_fn    defmask;
 };
 
 struct group_stats {
@@ -534,6 +556,42 @@ struct group_stats {
 static void fix_mem_ebx(const struct variant *v);
 static void fix_bt_mem_reg(const struct variant *v);
 
+/* A register of an input or a result by ModRM number (not ESP). */
+static uint32_t *
+kout_reg(struct kout *o, int r)
+{
+    switch (r) {
+        case R_EAX: return &o->eax;
+        case R_ECX: return &o->ecx;
+        case R_EDX: return &o->edx;
+        case R_EBX: return &o->ebx;
+        case R_EBP: return &o->ebp;
+        case R_ESI: return &o->esi;
+        default:    return &o->edi;
+    }
+}
+
+static uint32_t
+kin_reg(const struct kin *in, int r)
+{
+    switch (r) {
+        case R_EAX: return in->eax;
+        case R_ECX: return in->ecx;
+        case R_EDX: return in->edx;
+        case R_EBX: return in->ebx;
+        case R_EBP: return in->ebp;
+        case R_ESI: return in->esi;
+        default:    return in->edi;
+    }
+}
+
+/* Byte registers in ModRM order: AL CL DL BL AH CH DH BH. */
+static uint32_t
+kin_reg8(const struct kin *in, int r)
+{
+    return r < 4 ? kin_reg(in, r) & 0xff : (kin_reg(in, r - 4) >> 8) & 0xff;
+}
+
 /* A result as any machine would give it: EBX holds the buffer's address in
    the memory forms, and the buffer is wherever this machine put it. */
 static void
@@ -541,6 +599,9 @@ normalize(const struct variant *v, struct kout *d)
 {
     if (v->fix_input == fix_mem_ebx || v->fix_input == fix_bt_mem_reg)
         d->ebx -= (uint32_t) g_buf;
+    for (int r = 0; r < 8; r++)
+        if ((v->norm & (1 << r)) && r != R_ESP)
+            *kout_reg(d, r) -= (uint32_t) g_buf;
 }
 
 /* The flags each SETcc condition reads. */
@@ -551,7 +612,7 @@ static const uint16_t cc_reads[8] = {
 /* Fold one result into the defined-result CRC, masking what the
    architecture leaves undefined. Returns 0 if nothing of it is defined. */
 static int
-defined_result(const struct variant *v, const struct kout *o, struct kout *d)
+defined_result(const struct variant *v, const struct kin *in, const struct kout *o, struct kout *d)
 {
     uint16_t undef    = producers[v->producer].undef;
     uint32_t eax_mask = 0xffffffff;
@@ -588,6 +649,10 @@ defined_result(const struct variant *v, const struct kout *o, struct kout *d)
             if (v->fx_arg == 1 || v->fx_arg == 4 || v->fx_arg == 6)
                 undef |= F_AF;
             break;
+        case FX_CUSTOM:
+            if (!v->defmask(v, in, d, &undef))
+                return 0;
+            break;
         default:
             return 0;
     }
@@ -619,11 +684,20 @@ fill_input(void)
         g_in.lowbuf[i] = rnd();
 }
 
+/* The stack a variant with v->stack runs on: in the sandbox, well above the
+   buffer. ESP is saved around it; its final value, relative to the buffer,
+   is returned in fault_err when nothing faulted. */
+#define STACK_TOP (g_buf + 0x800)
+uint32_t g_stack_save, g_stack_out;
+
 static void
-capture(struct kout *o, uint8_t *slot, int vec, int mem)
+capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem)
 {
+    uint32_t fmask = v->flags_mask ? v->flags_mask : 0x0cd5;
     *o          = g_out;
-    o->flags   &= 0x0cd5;
+    o->flags   &= fmask;
+    if (v->stack)
+        o->fault_err = g_stack_out - (uint32_t) g_buf;
     o->fault    = vec;
     memcpy(o->buf, g_buf, BUF_SIZE);
     memcpy(o->lowbuf, LOWBUF, LOWBUF_SIZE);
@@ -637,7 +711,7 @@ capture(struct kout *o, uint8_t *slot, int vec, int mem)
         o->ebp      = g_fault.ebp;
         o->esi      = g_fault.esi;
         o->edi      = g_fault.edi;
-        o->flags    = g_fault.eflags & 0x0cd5;
+        o->flags    = g_fault.eflags & fmask;
         o->fault_ip = g_fault.eip - (uint32_t) slot;
         o->fault_err = g_fault.err;
     }
@@ -747,20 +821,40 @@ run_variant(const struct variant *v)
     }
     in = g_in;
 
-    uint8_t    *slot = arena_alloc(160);
+    int         big  = v->emit || v->stack;
+    uint8_t    *slot = arena_alloc(big ? 256 : 160);
     struct emit e    = { slot };
     emit_prologue(&e);
+    if (v->stack) {
+        e8(&e, 0x89); /* mov [g_stack_save], esp */
+        e8(&e, 0x25);
+        e32(&e, (uint32_t) &g_stack_save);
+        e8(&e, 0xbc); /* mov esp, STACK_TOP */
+        e32(&e, (uint32_t) STACK_TOP);
+    }
     ebytes(&e, producers[v->producer].bytes, producers[v->producer].len);
     if (v->boundary) {
         e8(&e, 0xeb); /* jmp $+2: the test starts a new block */
         e8(&e, 0x00);
     }
-    ebytes(&e, v->target, v->target_len);
-    emit_epilogue(&e);
+    if (v->emit)
+        v->emit(&e, v);
+    else
+        ebytes(&e, v->target, v->target_len);
+    if (v->stack) {
+        e8(&e, 0x89); /* mov [g_stack_out], esp */
+        e8(&e, 0x25);
+        e32(&e, (uint32_t) &g_stack_out);
+        e8(&e, 0x8b); /* mov esp, [g_stack_save] */
+        e8(&e, 0x25);
+        e32(&e, (uint32_t) &g_stack_save);
+    }
+    emit_epilogue(&e, v->stack || v->flags_mask);
 
-    /* Only the memory forms (those with an input fixer) touch memory: the
-       sandbox is refilled and checked for them alone. */
-    int mem = v->fix_input != 0;
+    /* Only the memory forms (those with an input fixer) and the stack
+       variants touch memory: the sandbox is refilled and checked for them
+       alone. */
+    int mem = (v->fix_input != 0 && !v->reg_fix) || v->stack;
     for (int r = 0; r < RUNS; r++) {
         if (mem)
             memset(SANDBOX, 0xa5, SANDBOX_SIZE);
@@ -768,7 +862,7 @@ run_variant(const struct variant *v)
         memcpy(LOWBUF, in.lowbuf, LOWBUF_SIZE);
         memset(&g_out, 0, sizeof(g_out));
         int vec = run_kernel(slot);
-        capture(&out[r], slot, vec, mem);
+        capture(v, &out[r], slot, vec, mem);
     }
 
     g_stats.tests++;
@@ -786,12 +880,12 @@ run_variant(const struct variant *v)
     }
     g_stats.crc_interp = crc_add(g_stats.crc_interp, &out[0], sizeof(struct kout));
     g_stats.crc_comp   = crc_add(g_stats.crc_comp, &out[RUNS - 1], sizeof(struct kout));
-    if (!v->no_ref && out[0].fault == 0xff) {
+    if (!v->no_ref && (out[0].fault == 0xff || v->faults_ok)) {
         struct kout raw = out[0];
         normalize(v, &raw);
         g_stats.crc_raw = crc_add(g_stats.crc_raw, &raw, sizeof(raw));
         struct kout d;
-        if (defined_result(v, &out[0], &d)) {
+        if (defined_result(v, &in, &out[0], &d)) {
             g_stats.defined++;
             g_stats.crc_defined = crc_add(g_stats.crc_defined, &d, sizeof(d));
 #ifdef DUMP
@@ -907,9 +1001,13 @@ status(void)
     }
     for (p = "  group "; *p; p++)
         line[n++] = *p;
-    line[n++] = '0' + g_group_no;
+    if (g_group_no >= 10)
+        line[n++] = '0' + g_group_no / 10;
+    line[n++] = '0' + g_group_no % 10;
     line[n++] = '/';
-    line[n++] = '0' + g_group_count;
+    if (g_group_count >= 10)
+        line[n++] = '0' + g_group_count / 10;
+    line[n++] = '0' + g_group_count % 10;
     line[n++] = ' ';
     for (p = g_group_name; *p && n < 40; p++)
         line[n++] = *p;
@@ -994,6 +1092,19 @@ group_end(const char *name)
     g_total_mismatches += g_stats.mismatches;
 }
 
+/* A group this CPU can't run: said once, counted as nothing. */
+static void
+group_skip(const char *name, const char *why)
+{
+    if (g_counting)
+        return;
+    post(++g_group_post);
+    puts_("GROUP ");
+    puts_(name);
+    puts_(" skipped: ");
+    puts_(why);
+    puts_("\n");
+}
 
 #include "groups.inc"
 
@@ -1010,7 +1121,7 @@ cmain(uint32_t rom_base)
     ram_detect();
     arena_init();
 
-    puts_("\nCPUTEST 1 rom=");
+    puts_("\nCPUTEST 2 rom=");
     puthex(rom_base, 5);
     puts_(" ram=");
     putdec(g_ram_top >> 20);

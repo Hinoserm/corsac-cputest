@@ -12,7 +12,8 @@ It runs with no OS at all, from either of these:
   ROM card at C8000h (86Box: *Generic ISA ROM Board*).
 
 Output goes to COM1 at 115200 8N1, and to the screen. The top line of the
-screen shows live status.
+screen shows live status. The first line out is `CPUTEST <version>`, then
+the CPU's vendor, signature and feature flags.
 
 ## Running it on real hardware
 
@@ -45,6 +46,42 @@ by definition.
 Memory operands point into a 16 KB sandbox that is refilled before every run
 and CRC'd after it, so a wrong address shows up as a wrong result instead of
 landing in the harness.
+
+## Groups
+
+The first six were recorded first; their order and contents never change,
+so their CRCs stay comparable across versions. New groups only go at the end.
+
+| # | group          | what                                                            |
+|---|----------------|-----------------------------------------------------------------|
+| 1 | `alu.rr`       | ADD OR ADC SBB AND SUB XOR CMP, register forms, 8/16/32-bit     |
+| 2 | `setcc`        | all 16 conditions, byte registers and memory, after every producer |
+| 3 | `lahf.sahf`    | LAHF, SAHF and both orders                                      |
+| 4 | `bswap`        | BSWAP, with and without an operand-size prefix                  |
+| 5 | `movzx.movsx`  | byte and word sources, 16/32-bit destinations                   |
+| 6 | `bt`           | BT BTS BTR BTC, register and immediate offsets, into memory     |
+| 7 | `imul`         | IMUL r, r/m and IMUL r, r/m, imm8/imm                           |
+| 8 | `mul.div`      | MUL IMUL DIV IDIV, 8/16/32-bit, #DE included                    |
+| 9 | `shift.rotate` | all eight ops by CL, by 1 and by immediate, RCL/RCR included    |
+| 10 | `shld.shrd`   | by CL and immediate, 16/32-bit, register and memory             |
+| 11 | `bsf.bsr`     | zero, single-bit and random sources                             |
+| 12 | `cmpxchg.xadd` | CMPXCHG, XADD, LOCK forms, #UD for LOCK on a register, CMPXCHG8B |
+| 13 | `bcd`         | DAA DAS AAA AAS AAM AAD (any base, AAM 0 = #DE), SALC           |
+| 14 | `string`      | MOVS CMPS STOS LODS SCAS, REP/REPE/REPNE, both directions, 16-bit addressing |
+| 15 | `popf.pushf`  | POPF/POPFD of any flags but TF and IF, PUSHF of every lazy state |
+| 16 | `stack`       | PUSH ESP, POP [ESP], PUSHA/POPA, POP SS, ENTER (nesting 0-33), LEAVE |
+| 17 | `far.call`    | far CALL/JMP direct and indirect, RETF, RETF n, RET n, IRETD, in protected mode |
+| 18 | `int.ud`      | INT3, INT n, INTO, ICEBP, INT past the IDT (#GP), invalid encodings (#UD) |
+| 19 | `bound.arpl`  | BOUND inside, on and outside the bounds (#BR), ARPL             |
+| 20 | `misc`        | XLAT, CMC CLC STC CLD STD, WAIT, PAUSE, XCHG with memory        |
+
+Groups 7 on are mostly instructions 86Box's recompiler still hands to the
+interpreter. Faults are results too: the vector, the error code and where
+it happened all go into the CRCs. Groups that need something the CPU lacks
+(a 486, CMPXCHG8B) say so and are skipped.
+
+The test never uses LOCK CMPXCHG8B with a register operand. That's the
+Pentium F00F erratum, and it would hang the machine.
 
 ## Output
 
@@ -82,6 +119,8 @@ in every group.
 | movzx.movsx | 28f49335    |
 | bt          | 78164abb    |
 
+Groups 7 on have no reference values yet.
+
 Two interpreter bugs in 86Box turned up this way, both in upstream master:
 
 - **BT, BTS, BTR and BTC with a memory operand and a register bit offset**
@@ -117,7 +156,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `stub.asm`   | option ROM entry: A20, protected mode, copies the payload to 1 MB |
 | `rt.asm`     | runtime: GDT, IDT stubs, `run_kernel`, fault capture        |
 | `harness.c`  | emitter, runner, CRCs, serial and screen output             |
-| `groups.inc` | the test groups                                             |
+| `groups.inc` | the first six groups, and the group table                   |
+| `groups_ops.inc` | groups 7 on                                               |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

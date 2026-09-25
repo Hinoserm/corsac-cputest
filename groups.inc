@@ -354,8 +354,14 @@ group_bt(void)
     group_end(name);
 }
 
+#include "groups_ops.inc"
+
 static void (*const groups[])(void) = {
     group_alu, group_setcc, group_lahf_sahf, group_bswap, group_movx, group_bt,
+    /* Everything below was added after the first six were recorded. */
+    group_imul, group_muldiv, group_shift, group_shd, group_bs, group_cmpxchg,
+    group_bcd, group_string, group_popf, group_stack, group_far, group_int,
+    group_bound_arpl, group_misc,
 };
 
 /* Each group twice: counted first, so the status line knows how many are
