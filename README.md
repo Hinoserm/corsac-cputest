@@ -153,6 +153,7 @@ between versions until the group itself changes.
 | 254 | `gateparams` | call gates copying three parameters into ring 1 from rings 3, 2, 1; gates to ring-3 code; a DPL-1 gate outward |
 | 255 | `tf.step` | single-step (TF) after 16 kinds of instruction: where the trap lands, DR6.BS, and what beats it (INT3, ICEBP, UD2) |
 | 256 | `tf.shadow` | MOV SS and POP SS hold off the single-step trap for one instruction; STI and MOV DS don't |
+| 257 | `tf.rep` | REP MOVS/STOS/CMPS/SCAS/LODS under TF: one iteration per trap, counts 5, 1 and 0 |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
