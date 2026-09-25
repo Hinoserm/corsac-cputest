@@ -116,6 +116,7 @@ between versions until the group itself changes.
 | 217 | `r3.gates` | call gates of every DPL (and into ring 1), parameter copying, conforming code, direct and JMP transfers that must #GP |
 | 218 | `r3.int` | INT through gates of DPL 0 and 1 (#GP), INT3 and INT 3 (#GP), ICEBP (no DPL check), INTO |
 | 219 | `r3.tsd` | CR4.TSD: RDTSC faults outside ring 0, whatever IOPL; RDPMC without CR4.PCE |
+| 220 | `r3.pf` | paging at CPL 3: supervisor pages, read-only pages, missing pages; U/S in the error code |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
