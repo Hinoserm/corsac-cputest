@@ -577,3 +577,72 @@ group_string_segs(void)
     }
     group_end(name);
 }
+
+/* ---- IRETD's checks on the frame --------------------------------------------------------------------------- */
+
+/* IRETD at CPL 0 through a hand-built frame to an outer ring: a good one
+   (DS, ES and FS of DPL 0 come out null), then a null, data, RPL-0 or
+   out-of-GDT CS, a null, RPL-mismatched, DPL-0, read-only, not-present
+   or TSS SS; execute-only and conforming code are fine to land in.
+   arg3: SS << 16 | CS. */
+static void
+emit_iretfr(struct emit *e, const struct variant *v)
+{
+    static const uint8_t land[] = {
+        0x8c, 0xde, /* mov esi, ds */
+        0x8c, 0xc7, /* mov edi, es */
+        0x8c, 0xe5, /* mov ebp, fs */
+        0x8c, 0xca, /* mov edx, cs */
+        0xcd, 0x30, /* int 30h */
+    };
+    e8(e, 0x68); /* push ss */
+    e32(e, v->arg3 >> 16);
+    e8(e, 0x68); /* push esp */
+    e32(e, (uint32_t) g_rstack[3] + sizeof(g_rstack[0]));
+    e8(e, 0x6a); /* push eflags: nothing but bit 1 */
+    e8(e, 0x02);
+    e8(e, 0x68); /* push cs */
+    e32(e, v->arg3 & 0xffff);
+    e8(e, 0x68); /* push the landing point */
+    uint8_t *l = e->p;
+    e32(e, 0);
+    e8(e, 0xcf); /* iretd */
+    put32_at(l, (uint32_t) e->p);
+    ebytes(e, land, sizeof(land));
+}
+
+static void
+group_iret_frames(void)
+{
+    static const uint16_t frames[][2] = {
+        { SEL_CODE3 | 3, SEL_DATA3 | 3 },   /* good */
+        { 0, SEL_DATA3 | 3 },               /* CS null */
+        { SEL_DATA3 | 3, SEL_DATA3 | 3 },   /* CS data */
+        { SEL_CODE3, SEL_DATA3 | 3 },       /* CS RPL 0, DPL 3 */
+        { 0x1f8 | 3, SEL_DATA3 | 3 },       /* CS past the GDT */
+        { SEL_CODE3 | 3, 0 },               /* SS null */
+        { SEL_CODE3 | 3, SEL_DATA3 },       /* SS RPL 0 */
+        { SEL_CODE3 | 3, 0x10 | 3 },        /* SS DPL 0 */
+        { SEL_CODE3 | 3, SEL_RO3 | 3 },     /* SS read-only */
+        { SEL_CODE3 | 3, SEL_NP3 | 3 },     /* SS not present: #SS */
+        { SEL_CODE3 | 3, SEL_TSS | 3 },     /* SS a TSS */
+        { SEL_XO3 | 3, SEL_DATA3 | 3 },     /* execute-only code */
+        { SEL_CONF3 | 3, SEL_DATA3 | 3 },   /* conforming, DPL 3 */
+        { SEL_CONF0 | 3, SEL_DATA3 | 3 },   /* conforming, DPL 0, RPL 3 */
+        { SEL_CODE1 | 1, SEL_DATA1 | 1 },   /* to ring 1 */
+        { SEL_CODE1 | 1, SEL_DATA3 | 3 },   /* ring 1 CS, ring 3 SS */
+    };
+    struct variant v = { .group = "iret.frames", .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
+                         .emit = emit_iretfr, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+    if (!ring_begin(v.group, 0, 0))
+        return;
+    for (unsigned i = 0; i < sizeof(frames) / sizeof(frames[0]); i++) {
+        v.target[0]  = 0xcf; /* for the reports */
+        put_le(v.target + 1, frames[i][0], 2);
+        put_le(v.target + 3, frames[i][1], 2);
+        v.target_len = 5;
+        v.arg3       = (uint32_t) frames[i][1] << 16 | frames[i][0];
+        run_plain(&v, 1);
+    }
+    ring_end(v.group, 0, 0);
+}
