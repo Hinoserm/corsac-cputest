@@ -351,3 +351,49 @@ group_string_long(void)
     }
     group_end(name);
 }
+
+/* ---- segment registers in 32-bit registers and on the stack ---------------------------- */
+
+/* MOV r32, Sreg (the upper half: zero on a P6, the model's own before),
+   MOV r16, Sreg, MOV [m], Sreg (16 bits), and PUSH Sreg with a 32-bit
+   operand onto a slot holding FFFFFFFFh: a 16-bit write or a zero-
+   extended one. Raw. */
+static void
+group_sreg_upper(void)
+{
+    static const uint8_t pushes[6][2] = { { 0x06 }, { 0x0e }, { 0x16 }, { 0x1e }, { 0x0f, 0xa0 }, { 0x0f, 0xa8 } };
+    const char          *name         = "sreg.upper";
+    struct variant       v            = { .group = name, .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 0,
+                                          .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+    group_begin(name);
+    for (int s = 0; s < 6; s++) {
+        uint8_t mod = 0xc0 | (s << 3); /* ModRM for Sreg s */
+        v.target[0] = 0x8c;             /* mov eax, sreg (EAX random going in) */
+        v.target[1] = mod;
+        v.target_len = 2;
+        run_plain(&v, 1);
+        v.target[0] = 0x66; /* mov ax, sreg */
+        v.target[1] = 0x8c;
+        v.target[2] = mod;
+        v.target_len = 3;
+        run_plain(&v, 1);
+        v.target[0] = 0x8c; /* mov [ebx], sreg */
+        v.target[1] = 0x03 | (s << 3);
+        v.target_len = 2;
+        run_plain(&v, 1);
+        int n = 0; /* mov dword [esp-4], -1; push sreg; pop eax */
+        v.target[n++] = 0xc7;
+        v.target[n++] = 0x44;
+        v.target[n++] = 0x24;
+        v.target[n++] = 0xfc;
+        put_le(v.target + n, 0xffffffff, 4);
+        n += 4;
+        v.target[n++] = pushes[s][0];
+        if (pushes[s][1])
+            v.target[n++] = pushes[s][1];
+        v.target[n++] = 0x58;
+        v.target_len  = n;
+        run_plain(&v, 1);
+    }
+    group_end(name);
+}
