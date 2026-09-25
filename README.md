@@ -128,6 +128,7 @@ between versions until the group itself changes.
 | 229 | `r1.ac` | CR0.AM and EFLAGS.AC at CPL 1: never #AC |
 | 230 | `r1.pf` | paging at CPL 1: supervisor access to every page, read-only pages writable with WP clear |
 | 231 | `r1.pf.wp` | the same with CR0.WP: ring 1 writes to read-only pages fault |
+| 232 | `r1.outer` | IRETD and RETF from ring 1 to rings 2 and 3: DS and ES of DPL 1 loaded null; IRETD within ring 1 keeps them |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
