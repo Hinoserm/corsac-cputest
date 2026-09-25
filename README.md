@@ -151,6 +151,7 @@ between versions until the group itself changes.
 | 252 | `r3.popseg` | POP DS/ES/FS/GS/SS at CPL 3 of good, other-ring, DPL-0, null, TSS, code, execute-only, read-only and missing selectors |
 | 253 | `r1.popseg` | the same at CPL 1 |
 | 254 | `gateparams` | call gates copying three parameters into ring 1 from rings 3, 2, 1; gates to ring-3 code; a DPL-1 gate outward |
+| 255 | `tf.step` | single-step (TF) after 16 kinds of instruction: where the trap lands, DR6.BS, and what beats it (INT3, ICEBP, UD2) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -303,7 +304,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_cpu.inc` | groups 195-199: aliases, CPUID, MSRs, the TSC, Cyrix       |
 | `groups_paging.inc` | groups 200-210: paging                                  |
 | `groups_ring.inc` | groups 211-241: rings 1-3 and V86 mode                   |
-| `groups_ring2.inc` | groups 242 on: limits, stacks, gates, 16-bit code in rings |
+| `groups_ring2.inc` | groups 242-254: limits, stacks, gates, 16-bit code in rings |
+| `groups_debug.inc` | groups 255 on: single-step and the debug registers         |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

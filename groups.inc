@@ -395,6 +395,7 @@ group_bt(void)
 #include "groups_paging.inc"
 #include "groups_ring.inc"
 #include "groups_ring2.inc"
+#include "groups_debug.inc"
 
 /* The groups in order. A group is a function, or one of a family of
    parametrised ones (the sampled loops) with its index. */
@@ -492,6 +493,7 @@ static const struct group_def groups[] = {
     G(group_r3_popseg),
     G(group_r1_popseg),
     G(group_gateparams),
+    G(group_tf_step),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

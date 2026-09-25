@@ -579,6 +579,7 @@ struct variant {
     uint8_t       code16;        /* producer and target run in a 16-bit code segment */
     uint8_t       paging;        /* #PF: fault_err = error code | (CR2 - buffer) << 8 */
     uint8_t       ring;          /* 1-3: run at that CPL; 4: in V86 mode (see ring_env_on()) */
+    uint8_t       debug;         /* fault_err = DR6 after the run, fault or not */
     uint32_t      ring_flags;    /* EFLAGS bits the entry IRET adds: IOPL, AC */
     void        (*before_run)(const struct variant *v); /* before each of the four runs */
     void        (*after_run)(const struct variant *v);  /* after each, before the harness looks at memory */
@@ -1035,6 +1036,11 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
             o->fault_ip = 0x80000000u | (g_fault.eip - (uint32_t) g_buf);
         o->fault_err = g_fault.err;
 #ifndef HOSTTEST
+        if (v->debug) {
+            uint32_t dr6;
+            __asm__ volatile("mov %%dr6, %0" : "=r"(dr6));
+            o->fault_err = dr6;
+        }
         if (v->paging && vec == 14) {
             uint32_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
@@ -1496,7 +1502,7 @@ static void
 def_hash(const struct variant *v)
 {
     uint32_t f[16] = { v->target_len, v->producer, v->boundary, v->fx, v->fx_arg, v->arg, v->arg2, v->arg3,
-                       v->flags_mask, v->stack | (v->mmx << 1) | (v->code16 << 2) | (v->paging << 3) | (v->faults_ok << 4) | (v->no_ref << 5) | (v->reg_fix << 6),
+                       v->flags_mask, v->stack | (v->mmx << 1) | (v->code16 << 2) | (v->paging << 3) | (v->faults_ok << 4) | (v->no_ref << 5) | (v->reg_fix << 6) | (v->debug << 7),
                        v->ring, v->ring_flags, v->norm, v->emit != 0, v->defmask != 0, (v->fix_input != 0) | ((v->canon != 0) << 1) };
     g_defhash = crc_add(g_defhash, v->target, v->target_len);
     g_defhash = crc_add(g_defhash, f, sizeof(f));
@@ -1623,6 +1629,13 @@ run_variant(const struct variant *v)
         if (v->after_run)
             v->after_run(v);
         capture(v, &out[r], slot, vec, mem);
+#ifndef HOSTTEST
+        if (v->debug && vec == 0xff) {
+            uint32_t dr6;
+            __asm__ volatile("mov %%dr6, %0" : "=r"(dr6));
+            out[r].fault_err = dr6;
+        }
+#endif
         if (v->canon && out[r].fault == 0xff)
             v->canon(v, &in, &out[r]);
         if (v->mmx)
