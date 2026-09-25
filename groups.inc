@@ -417,6 +417,7 @@ static const struct group_def groups[] = {
     GA(group_opmap, 2),
     GA(group_opmap, 3),
     GA(group_opmap, 4),
+    GA(group_opmap, 5),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
