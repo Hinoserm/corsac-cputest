@@ -108,6 +108,7 @@ between versions until the group itself changes.
 | 204 | `pg.cross` | accesses split across a present and a missing page: which half faults, CR2, nothing written (raw) |
 | 205 | `pg.ad` | the accessed and dirty bits in the PTE after a read, a write, RMW, and a write after a read |
 | 206 | `pg.tlb` | a PTE changed under a cached translation: stale read (raw), then INVLPG or a CR3 reload |
+| 207 | `pg.pse` | a 4 MB page (CR4.PSE) aliasing low memory: reads, writes and the PDE's accessed/dirty bits |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
