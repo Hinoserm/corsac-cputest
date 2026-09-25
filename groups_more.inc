@@ -147,7 +147,9 @@ emit_smc(struct emit *e, const struct variant *v)
 
 /* Code in device memory: a routine written into off-screen VGA text
    memory (BF000h), called, its immediate patched, called again (ESI and
-   EDI: both results). 86Box once fetched such code from a dummy. */
+   EDI: both results). 86Box once fetched such code from a dummy. Not
+   under a hypervisor (CPUID says so): KVM can't run code out of an
+   emulated device. */
 static void
 smc_device(const char *name)
 {
@@ -162,6 +164,12 @@ smc_device(const char *name)
 #ifdef HOSTTEST
     return; /* no VGA memory in a Linux process */
 #endif
+    if (g_cpu.has_cpuid) { /* KVM can't fetch code from an emulated device: not under a hypervisor */
+        uint32_t ea, eb, ec, ed;
+        cpuid(1, &ea, &eb, &ec, &ed);
+        if (ec & (1u << 31))
+            return;
+    }
     memcpy(v.target, b, sizeof(b));
     v.target_len = sizeof(b);
     run_plain(&v, 1);
