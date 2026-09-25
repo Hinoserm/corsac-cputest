@@ -84,9 +84,11 @@ def main():
     ap.add_argument("--display", type=int, default=91)
     ap.add_argument("--timeout", type=int, default=1200)
     ap.add_argument("--tag", default="")
+    ap.add_argument("--dump", action="store_true", help="print every defined result")
     args = ap.parse_args()
 
-    subprocess.run([sys.executable, os.path.join(HERE, "build.py")], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run([sys.executable, os.path.join(HERE, "build.py")] + (["--dump"] if args.dump else []),
+                   check=True, stdout=subprocess.DEVNULL)
     rom = os.path.join(HERE, "build", "cputest.rom")
 
     m = MACHINES[args.machine]

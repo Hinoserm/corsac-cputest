@@ -724,6 +724,32 @@ run_variant(const struct variant *v)
         if (defined_result(v, &out[0], &d)) {
             g_stats.defined++;
             g_stats.crc_defined = crc_add(g_stats.crc_defined, &d, sizeof(d));
+#ifdef DUMP
+            /* One line per defined result, to diff against the host build. */
+            puts_("D ");
+            puts_(v->group);
+            putch(' ');
+            for (int i = 0; i < v->target_len; i++)
+                puthex(v->target[i], 2);
+            putch(' ');
+            puts_(producers[v->producer].name);
+            putch(v->boundary ? 'j' : '-');
+            puts_(" in=");
+            puthex(in.flags, 4);
+            putch(',');
+            puthex(in.ecx, 8);
+            putch(',');
+            puthex(in.edx, 8);
+            puts_(" fl=");
+            puthex(d.flags, 4);
+            for (int r = 0; r < 7; r++) { /* eax ecx edx ebx ebp esi edi */
+                putch(' ');
+                puthex((&d.eax)[r], 8);
+            }
+            puts_(" m=");
+            puthex(crc_add(d.sandbox_crc, d.buf, BUF_SIZE + LOWBUF_SIZE), 8);
+            putch('\n');
+#endif
         }
     }
 }

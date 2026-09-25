@@ -24,7 +24,8 @@ def run(cmd):
 
 def build_host():
     """The harness as a 32-bit Linux program, to check it on real silicon."""
-    run(["gcc", "-m32", "-march=i386", "-O2", "-std=gnu11", "-DHOSTTEST", "-no-pie", "-fno-pie",
+    extra = ["-DDUMP"] if "--dump" in sys.argv else []
+    run(["gcc", "-m32", "-march=i386", "-O2", "-std=gnu11", "-DHOSTTEST", "-no-pie", "-fno-pie"] + extra + [
          "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-unused-function",
          "-I", HERE, "-o", "cputest-host", os.path.join(HERE, "harness.c")])
 
@@ -35,7 +36,8 @@ def main():
         build_host()
         return
     run(["nasm", "-f", "elf32", "-o", "rt.o", os.path.join(HERE, "rt.asm")])
-    run(["gcc"] + CFLAGS + ["-I", HERE, "-c", "-o", "harness.o", os.path.join(HERE, "harness.c")])
+    extra = ["-DDUMP"] if "--dump" in sys.argv else []
+    run(["gcc"] + CFLAGS + extra + ["-I", HERE, "-c", "-o", "harness.o", os.path.join(HERE, "harness.c")])
     run(["ld", "-m", "elf_i386", "-T", os.path.join(HERE, "payload.ld"), "-o", "payload.elf", "rt.o", "harness.o"])
     run(["objcopy", "-O", "binary", "payload.elf", "payload.bin"])
 
