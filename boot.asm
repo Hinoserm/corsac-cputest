@@ -1,7 +1,7 @@
 ; CPU accuracy test disk: the boot sector.
 ;
 ; The BIOS loads this to 0000:7C00. It reads the test ROM image (the same
-; one that goes on an ISA ROM card) from the sectors after it into 1000:0000
+; one that goes on an ISA ROM card) from the sectors after it into 2000:0000
 ; and far-calls its entry at offset 3, exactly as a BIOS calls an option
 ; ROM. Reads use the INT 13h extensions where the BIOS has them, else CHS
 ; one sector at a time with the drive's own geometry.
@@ -9,7 +9,7 @@
 bits 16
 org 0x7c00
 
-LOAD_SEG equ 0x1000
+LOAD_SEG equ 0x2000                     ; 20000h: some BIOSes (ASUS, Award Medallion 6.0) use 1000:0000
 
 start:
         cli

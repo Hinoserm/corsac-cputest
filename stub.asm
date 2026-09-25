@@ -1,6 +1,6 @@
 ; CPU accuracy test: the loader.
 ;
-; The boot sector loads this to 1000:0000 and far-calls offset 3 in real
+; The boot sector loads this to 2000:0000 and far-calls offset 3 in real
 ; mode (the layout of an option ROM, which it once also was). From here:
 ; interrupts off, A20 on, a flat GDT, protected mode, the payload copied to
 ; 1 MB, and a jump to it. Nothing returns.

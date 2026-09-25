@@ -172,6 +172,15 @@ run_facts(struct variant *v, const uint32_t val[5])
 {
     static const uint8_t op[5] = { 0xb8, 0xb9, 0xba, 0xbe, 0xbf };
     int                  n     = 0;
+    if (!g_counting) { /* the values themselves, for whoever reads the log */
+        puts_("FACTS ");
+        puts_(v->group);
+        for (int i = 0; i < 5; i++) {
+            putch(' ');
+            puthex(val[i], 8);
+        }
+        putch('\n');
+    }
     for (int i = 0; i < 5; i++) {
         v->target[n++] = op[i];
         put_le(v->target + n, g_counting ? 0 : val[i], 4);

@@ -28,6 +28,15 @@ def dump_flags():
     return ["-DDUMP"]
 
 
+def only_flags():
+    """--only PREFIX[,PREFIX...]: an image that runs only the groups whose
+    names start with one of them (the others are skipped), for trying a few
+    groups quickly. Never for an image that gets committed."""
+    if "--only" not in sys.argv:
+        return []
+    return ['-DRUN_ONLY="%s"' % sys.argv[sys.argv.index("--only") + 1]]
+
+
 def run(cmd):
     print(" ".join(cmd))
     subprocess.run(cmd, check=True, cwd=OUT)
@@ -41,7 +50,7 @@ MUSL_GCC = os.path.expanduser(
 def build_host():
     """The harness as a static i386 ELF: runs on this Linux host and on
     CORSAC alike, and on anything back to a 486 (no CMOV)."""
-    extra = dump_flags()
+    extra = dump_flags() + only_flags()
     out = "cputest-dump" if extra else "cputest"
     run([MUSL_GCC, "-static", "-no-pie", "-fno-pie", "-march=i486", "-mtune=i486", "-O2", "-std=gnu11", "-DHOSTTEST"] + extra + [
          "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-unused-function", "-Wno-missing-field-initializers",
@@ -54,16 +63,16 @@ def main():
         build_host()
         return
     run(["nasm", "-f", "elf32", "-o", "rt.o", os.path.join(HERE, "rt.asm")])
-    extra = dump_flags()
+    extra = dump_flags() + only_flags()
     run(["gcc"] + CFLAGS + extra + ["-I", HERE, "-c", "-o", "harness.o", os.path.join(HERE, "harness.c")])
     run(["ld", "-m", "elf_i386", "-T", os.path.join(HERE, "payload.ld"), "-o", "payload.elf", "rt.o", "harness.o"])
     run(["objcopy", "-O", "binary", "payload.elf", "payload.bin"])
 
     payload = os.path.getsize(os.path.join(OUT, "payload.bin"))
     # The loader and payload, in whole 16 KB steps: the boot sector reads
-    # 32 sectors at a time, and loads to 1000:0000, below 640 KB.
+    # 32 sectors at a time, and loads to 2000:0000, below 640 KB.
     size = (payload + 512 + 16383) // 16384 * 16384
-    if size > 0x80000:
+    if size > 0x70000:
         sys.exit("payload too large: %d bytes" % payload)
 
     run(["nasm", "-f", "bin", "-DIMAGE_BLOCKS=%d" % min(size // 512, 255), "-I", OUT + "/",

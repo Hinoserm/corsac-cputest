@@ -223,6 +223,19 @@ madt_read(void)
     }
 }
 
+/* Tables good enough to find the other processors and I/O APICs by. */
+static int
+mp_usable_status(unsigned status)
+{
+    return status == MP_OK || status == MP_DEFAULT || status == MP_MADT || status == MP_EXT_SUM;
+}
+
+static int __attribute__((unused))
+mp_usable(void)
+{
+    return mp_usable_status(g_mp.status);
+}
+
 static void
 mp_read(void)
 {
@@ -247,19 +260,32 @@ mp_read(void)
             mp_default(phys(fps)[11]);
         else
             mp_table(phys32(fps + 4));
-        return;
-    }
-    madt_read();
-    if (g_mp.status == MP_NONE && bad)
+    } else if (bad)
         g_mp.status = MP_FPS_BAD;
+    /* The ACPI MADT too, and it wins when it lists more processors, as
+       Linux prefers it: some BIOSes' MP tables list only the ones they
+       saw start (QEMU's SeaBIOS lists one of two). */
+    struct mp_cpu    cpu[MP_MAX_CPUS];
+    struct mp_ioapic io[MP_MAX_IOAPICS];
+    unsigned         status = g_mp.status, n_cpus = g_mp.n_cpus, listed = g_mp.cpus_listed, n_io = g_mp.n_ioapics;
+    uint32_t         lapic  = g_mp.lapic;
+    memcpy(cpu, g_mp.cpu, sizeof(cpu));
+    memcpy(io, g_mp.io, sizeof(io));
+    g_mp.n_cpus = g_mp.cpus_listed = g_mp.n_ioapics = 0;
+    g_mp.status = MP_NONE;
+    madt_read();
+    if (g_mp.status == MP_MADT && (!mp_usable_status(status) || g_mp.cpus_listed > listed))
+        return; /* the MADT's lists stand */
+    if (g_mp.status == MP_MADT_BAD && status == MP_NONE)
+        return;
+    g_mp.status      = status;
+    g_mp.n_cpus      = n_cpus;
+    g_mp.cpus_listed = listed;
+    g_mp.n_ioapics   = n_io;
+    g_mp.lapic       = lapic;
+    memcpy(g_mp.cpu, cpu, sizeof(cpu));
+    memcpy(g_mp.io, io, sizeof(io));
 #endif
-}
-
-/* Tables good enough to find the other processors and I/O APICs by. */
-static int __attribute__((unused))
-mp_usable(void)
-{
-    return g_mp.status == MP_OK || g_mp.status == MP_DEFAULT || g_mp.status == MP_MADT || g_mp.status == MP_EXT_SUM;
 }
 
 /* ---- time without interrupts: PIT channel 2, polled ---------------------- */

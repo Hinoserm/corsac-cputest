@@ -1631,10 +1631,18 @@ def_hash(const struct variant *v)
     g_defhash = crc_add(g_defhash, f, sizeof(f));
 }
 
+#ifdef RUN_ONLY
+static int g_only_skip;
+#endif
+
 /* One variant with one input, run four times from a fresh address. */
 static void
 run_variant(const struct variant *v)
 {
+#ifdef RUN_ONLY
+    if (g_only_skip)
+        return;
+#endif
     struct kout out[RUNS];
     struct kin  in;
 
@@ -2083,6 +2091,22 @@ static void
 group_begin(const char *name)
 {
     memset(&g_stats, 0, sizeof(g_stats));
+#ifdef RUN_ONLY
+    /* build.py --only: groups whose names start with none of the
+       comma-separated prefixes run nothing */
+    g_only_skip = 1;
+    for (const char *p = RUN_ONLY; *p;) {
+        const char *g = name;
+        while (*p && *p != ',' && *p == *g)
+            p++, g++;
+        if (!*p || *p == ',')
+            g_only_skip = 0;
+        while (*p && *p != ',')
+            p++;
+        if (*p == ',')
+            p++;
+    }
+#endif
     /* Each group's inputs depend only on its name, so a group gives the
        same CRCs whatever ran before it. */
     uint32_t seed = 0x9e3779b9;
