@@ -619,12 +619,16 @@ group_cmpxchg(void)
 /* ---- DAA DAS AAA AAS AAM AAD SALC ----------------------------------------- */
 
 /* fx_arg: 0 DAA/DAS, 1 AAA/AAS, 2 AAM/AAD, 3 SALC. The arithmetic over
-   every AL, AF and CF is in exhaust8; here, each after every producer. */
+   every AL, AF and CF is in exhaust8; here, each after every producer.
+   DAA, DAS, AAA and AAS read AF and CF, SALC CF: after a producer that
+   leaves one undefined (a shift's AF), the result is undefined too. */
 static int
 dm_bcd(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
 {
     if (d->fault != 0xff)
         return 1;
+    if ((v->fx_arg < 2 && (*undef & (F_AF | F_CF))) || (v->fx_arg == 3 && (*undef & F_CF)))
+        return 0;
     switch (v->fx_arg) {
         case 0: *undef = F_OF; break;
         case 1: *undef = F_OF | F_SF | F_ZF | F_PF; break;
@@ -1042,6 +1046,14 @@ group_far(void)
 
 /* ---- software interrupts and invalid encodings ---------------------------- */
 
+/* INTO reads OF: after a producer that leaves it undefined (SAR by CL),
+   whether it traps is undefined. fx_arg: reads OF. */
+static int
+dm_into(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    return !(v->fx_arg && (*undef & F_OF));
+}
+
 static void
 group_int(void)
 {
@@ -1060,11 +1072,12 @@ group_int(void)
         { 0, SEQ(0x8e, 0xc8) }, /* MOV CS, AX: #UD */
     };
     const char    *name = "int.ud";
-    struct variant v    = { .group = name, .faults_ok = 1 };
+    struct variant v    = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_into };
     group_begin(name);
     for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
         memcpy(v.target, seqs[i].b, seqs[i].len);
         v.target_len = seqs[i].len;
+        v.fx_arg     = seqs[i].reads_flags;
         if (seqs[i].reads_flags)
             run_flags(&v, 1);
         else
