@@ -22,12 +22,19 @@ def run(cmd):
     subprocess.run(cmd, check=True, cwd=OUT)
 
 
+# The musl cross compiler CORSAC's own Linux programs are built with.
+MUSL_GCC = os.path.expanduser(
+    "~/projects/corsac86-gui/build/linuxbin/i686-linux-musl-cross/bin/i686-linux-musl-gcc")
+
+
 def build_host():
-    """The harness as a 32-bit Linux program, to check it on real silicon."""
+    """The harness as a static i386 ELF: runs on this Linux host and on
+    CORSAC alike, and on anything back to a 486 (no CMOV)."""
     extra = ["-DDUMP"] if "--dump" in sys.argv else []
-    run(["gcc", "-m32", "-march=i386", "-O2", "-std=gnu11", "-DHOSTTEST", "-no-pie", "-fno-pie"] + extra + [
+    out = "cputest-dump" if extra else "cputest"
+    run([MUSL_GCC, "-static", "-no-pie", "-fno-pie", "-march=i486", "-mtune=i486", "-O2", "-std=gnu11", "-DHOSTTEST"] + extra + [
          "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-unused-function",
-         "-I", HERE, "-o", "cputest-host", os.path.join(HERE, "harness.c")])
+         "-I", HERE, "-o", out, os.path.join(HERE, "harness.c")])
 
 
 def main():
@@ -59,6 +66,18 @@ def main():
     path = os.path.join(OUT, "cputest.rom")
     open(path, "wb").write(rom)
     print("%s: %d bytes (payload %d)" % (path, size, payload))
+
+    # The same image behind a boot sector, for a disk or a CF card: the boot
+    # sector loads it and calls it the way a BIOS calls an option ROM.
+    run(["nasm", "-f", "bin", "-DIMAGE_SECTORS=%d" % (size // 512), "-o", "boot.bin",
+         os.path.join(HERE, "boot.asm")])
+    boot = open(os.path.join(OUT, "boot.bin"), "rb").read()
+    assert len(boot) == 512 and boot[510:] == b"\x55\xaa"
+    img = boot + bytes(rom)
+    img += bytes((1 << 20) - len(img))  # 1 MB; dd writes it to the start of the card
+    path = os.path.join(OUT, "cputest.img")
+    open(path, "wb").write(img)
+    print("%s: %d bytes" % (path, len(img)))
 
 
 if __name__ == "__main__":

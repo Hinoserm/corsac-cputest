@@ -29,6 +29,7 @@
    run on the host CPU, output goes to stdout. It checks the harness, not
    86Box. */
 #    include "host.h"
+static int vga_quiet __attribute__((unused));
 #else
 static inline void
 outb(uint16_t port, uint8_t val)
@@ -58,6 +59,33 @@ serial_init(void)
     outb(COM1 + 4, 0x03);
 }
 
+/* The screen too, for a real machine with nothing on its serial port: the
+   80x25 colour text buffer, scrolling. Dump lines go to the serial port
+   only (see vga_quiet). */
+static int      vga_row = 24, vga_col;
+static int      vga_quiet;
+#define VGA ((volatile uint16_t *) 0xb8000)
+
+static void
+vga_putch(char c)
+{
+    if (c == '\r')
+        return;
+    if (c == '\n' || vga_col == 80) {
+        vga_col = 0;
+        if (++vga_row == 25) {
+            for (int i = 0; i < 24 * 80; i++)
+                VGA[i] = VGA[i + 80];
+            for (int i = 24 * 80; i < 25 * 80; i++)
+                VGA[i] = 0x0720;
+            vga_row = 24;
+        }
+        if (c == '\n')
+            return;
+    }
+    VGA[vga_row * 80 + vga_col++] = 0x0700 | (uint8_t) c;
+}
+
 static void
 putch(char c)
 {
@@ -67,6 +95,8 @@ putch(char c)
     while (!(inb(COM1 + 5) & 0x20) && --spin)
         ;
     outb(COM1, c);
+    if (!vga_quiet)
+        vga_putch(c);
 }
 
 static void
@@ -286,21 +316,25 @@ idt_init(void)
 
 /* ---- code arena: every generated copy gets a fresh address -------------- */
 
-#define ARENA_BASE  0x00400000u
 #define SLOT_ALIGN  64u
 #define PAGE_SIZE   4096u
 
+/* In the ROM these are fixed; the ELF build takes what the OS gives it. */
+uint8_t        *g_sandbox = (uint8_t *) 0x00300000;
+static uint32_t g_arena_base = 0x00400000;
 static uint32_t g_arena_next, g_arena_end, g_arena_wraps;
 
 static void
 arena_init(void)
 {
-    g_arena_next = ARENA_BASE;
-    g_arena_end  = g_ram_top - 0x100000;
 #ifdef HOSTTEST
-    host_arena(ARENA_BASE, g_arena_end - ARENA_BASE);
-    host_arena((uint32_t) SANDBOX, SANDBOX_SIZE);
+    g_arena_base = host_map(0x00400000, 60u << 20);
+    g_arena_end  = g_arena_base + (60u << 20);
+    g_sandbox    = (uint8_t *) host_map(0x00300000, SANDBOX_SIZE);
+#else
+    g_arena_end = g_ram_top - 0x100000;
 #endif
+    g_arena_next = g_arena_base;
 }
 
 /* An address never used for code before (until the arena wraps; the
@@ -313,7 +347,7 @@ arena_alloc(uint32_t len)
         a = (a + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     if (a + len > g_arena_end) {
         g_arena_wraps++;
-        a = ARENA_BASE;
+        a = g_arena_base;
     }
     g_arena_next = a + len;
     return (uint8_t *) a;
@@ -485,7 +519,20 @@ struct group_stats {
     uint32_t tests, mismatches, faults;
     uint32_t crc_interp, crc_comp;
     uint32_t defined, crc_defined;
+    uint32_t crc_raw; /* the same results unmasked: one CPU model against another */
 };
+
+static void fix_mem_ebx(const struct variant *v);
+static void fix_bt_mem_reg(const struct variant *v);
+
+/* A result as any machine would give it: EBX holds the buffer's address in
+   the memory forms, and the buffer is wherever this machine put it. */
+static void
+normalize(const struct variant *v, struct kout *d)
+{
+    if (v->fix_input == fix_mem_ebx || v->fix_input == fix_bt_mem_reg)
+        d->ebx -= (uint32_t) g_buf;
+}
 
 /* The flags each SETcc condition reads. */
 static const uint16_t cc_reads[8] = {
@@ -501,6 +548,7 @@ defined_result(const struct variant *v, const struct kout *o, struct kout *d)
     uint32_t eax_mask = 0xffffffff;
 
     *d = *o;
+    normalize(v, d);
     switch (v->fx) {
         case FX_NONE:
             break;
@@ -720,12 +768,16 @@ run_variant(const struct variant *v)
     g_stats.crc_interp = crc_add(g_stats.crc_interp, &out[0], sizeof(struct kout));
     g_stats.crc_comp   = crc_add(g_stats.crc_comp, &out[RUNS - 1], sizeof(struct kout));
     if (!v->no_ref && out[0].fault == 0xff) {
+        struct kout raw = out[0];
+        normalize(v, &raw);
+        g_stats.crc_raw = crc_add(g_stats.crc_raw, &raw, sizeof(raw));
         struct kout d;
         if (defined_result(v, &out[0], &d)) {
             g_stats.defined++;
             g_stats.crc_defined = crc_add(g_stats.crc_defined, &d, sizeof(d));
 #ifdef DUMP
             /* One line per defined result, to diff against the host build. */
+            vga_quiet = 1;
             puts_("D ");
             puts_(v->group);
             putch(' ');
@@ -749,8 +801,42 @@ run_variant(const struct variant *v)
             puts_(" m=");
             puthex(crc_add(d.sandbox_crc, d.buf, BUF_SIZE + LOWBUF_SIZE), 8);
             putch('\n');
+            vga_quiet = 0;
 #endif
         }
+#ifdef DUMP
+        /* The same result unmasked, undefined flags included: for comparing
+           an emulated CPU with the real one. */
+        {
+            struct kout r = out[0];
+            normalize(v, &r);
+            vga_quiet = 1;
+            puts_("R ");
+            puts_(v->group);
+            putch(' ');
+            for (int i = 0; i < v->target_len; i++)
+                puthex(v->target[i], 2);
+            putch(' ');
+            puts_(producers[v->producer].name);
+            putch(v->boundary ? 'j' : '-');
+            puts_(" in=");
+            puthex(in.flags, 4);
+            putch(',');
+            puthex(in.ecx, 8);
+            putch(',');
+            puthex(in.edx, 8);
+            puts_(" fl=");
+            puthex(r.flags, 4);
+            for (int i = 0; i < 7; i++) {
+                putch(' ');
+                puthex((&r.eax)[i], 8);
+            }
+            puts_(" m=");
+            puthex(crc_add(r.sandbox_crc, r.buf, BUF_SIZE + LOWBUF_SIZE), 8);
+            putch('\n');
+            vga_quiet = 0;
+        }
+#endif
     }
 }
 
@@ -788,6 +874,8 @@ group_end(const char *name)
     putdec(g_stats.defined);
     puts_(" crc_defined=");
     puthex(g_stats.crc_defined, 8);
+    puts_(" crc_raw=");
+    puthex(g_stats.crc_raw, 8);
     puts_("\n");
     g_total_tests += g_stats.tests;
     g_total_mismatches += g_stats.mismatches;

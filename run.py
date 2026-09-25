@@ -63,7 +63,9 @@ mode = 0
 fdd_01_type = none
 fdd_02_type = none
 
-[Other peripherals]
+{attach}"""
+
+ATTACH_ROM = """[Other peripherals]
 isarom0_type = isarom
 
 [Generic ISA ROM Board #1]
@@ -71,6 +73,14 @@ bios_fn = {rom}
 bios_addr = C8000
 bios_size = {romsize}
 rom_writes_enabled = 0
+"""
+
+# The CF-card image as the primary IDE disk: 1 MB, 64 cylinders, 2 heads,
+# 16 sectors.
+ATTACH_IMG = """[Hard disks]
+hdd_01_fn = {img}
+hdd_01_ide_channel = 0:0
+hdd_01_parameters = 16, 2, 64, 0, ide
 """
 
 
@@ -85,6 +95,7 @@ def main():
     ap.add_argument("--timeout", type=int, default=1200)
     ap.add_argument("--tag", default="")
     ap.add_argument("--dump", action="store_true", help="print every defined result")
+    ap.add_argument("--img", action="store_true", help="boot cputest.img from the hard disk instead of the ROM card")
     args = ap.parse_args()
 
     subprocess.run([sys.executable, os.path.join(HERE, "build.py")] + (["--dump"] if args.dump else []),
@@ -106,11 +117,17 @@ def main():
     # underneath a run.
     box = os.path.join(case, "86Box.bin")
     shutil.copy2(args.box, box)
-    romcopy = os.path.join(case, "cputest.rom")
-    shutil.copy2(rom, romcopy)
+    if args.img:
+        imgcopy = os.path.join(case, "cputest.img")
+        shutil.copy2(os.path.join(HERE, "build", "cputest.img"), imgcopy)
+        attach = ATTACH_IMG.format(img=imgcopy)
+    else:
+        romcopy = os.path.join(case, "cputest.rom")
+        shutil.copy2(rom, romcopy)
+        attach = ATTACH_ROM.format(rom=romcopy, romsize=os.path.getsize(romcopy))
     open(os.path.join(case, "86box.cfg"), "w").write(CFG.format(
         cpus=args.cpus, family=family, multi=multi, speed=speed, dynarec=0 if args.interp else 1,
-        machine=m["machine"], gfxcard=m["gfxcard"], rom=romcopy, romsize=os.path.getsize(romcopy)))
+        machine=m["machine"], gfxcard=m["gfxcard"], attach=attach))
 
     os.environ["BOX86"] = box
     sys.path.insert(0, SUITE)

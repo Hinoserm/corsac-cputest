@@ -49,7 +49,7 @@ post(uint8_t code)
     (void) code;
 }
 
-static uint32_t g_ram_top = 0x04000000; /* the arena ends 1 MB below this */
+static uint32_t g_ram_top = 0x04000000; /* printed only */
 
 static void
 ram_detect(void)
@@ -61,15 +61,17 @@ idt_init(void)
 {
 }
 
-static void
-host_arena(uint32_t base, uint32_t len)
+/* Memory the generated code can run in, at the hinted address if the OS
+   allows it. Nothing depends on where it lands. */
+static uint32_t
+host_map(uint32_t hint, uint32_t len)
 {
-    void *p = mmap((void *) base, len, PROT_READ | PROT_WRITE | PROT_EXEC,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (p != (void *) base) {
-        perror("arena mmap");
+    void *p = mmap((void *) hint, len, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        perror("mmap");
         exit(2);
     }
+    return (uint32_t) p;
 }
 
 struct fault g_fault;

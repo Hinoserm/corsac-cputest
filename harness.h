@@ -48,7 +48,8 @@ extern struct cpu_info g_cpu;
 /* Memory operands point into the middle of a 16 KB sandbox that is refilled
    before every run, so a write outside the operand (a wrong address) shows
    in the result instead of landing in the harness. */
-#define SANDBOX      ((uint8_t *) 0x00300000)
+extern uint8_t *g_sandbox;
+#define SANDBOX      g_sandbox
 #define SANDBOX_SIZE 0x4000u
 #define g_buf        (SANDBOX + 0x2000 - BUF_SIZE / 2)
 

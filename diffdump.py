@@ -7,6 +7,12 @@ summarise where the defined results differ.
 import collections
 import sys
 
+# D lines are defined results only; --raw compares R lines, undefined flags
+# included (a real CPU against the emulated one of the same model).
+KIND = "R" if "--raw" in sys.argv else "D"
+if "--raw" in sys.argv:
+    sys.argv.remove("--raw")
+
 FLAGS = [(0x0001, "CF"), (0x0004, "PF"), (0x0010, "AF"), (0x0040, "ZF"), (0x0080, "SF"),
          (0x0400, "DF"), (0x0800, "OF")]
 
@@ -15,7 +21,7 @@ def lines(path):
     out = []
     for line in open(path, errors="replace"):
         line = line.strip()
-        if line.startswith("D "):
+        if line.startswith(KIND + " ") and len(line.split()) == 14:
             out.append(line)
     return out
 
