@@ -310,6 +310,7 @@ group_tsc_write(void)
         0x3d, 0x00, 0x00, 0x00, 0x01, /* cmp eax, 1000000h */
         0x0f, 0x92, 0xc0,             /* setb al */
         0x0f, 0xb6, 0xc0,             /* movzx eax, al */
+        0x31, 0xff,                   /* xor edi, edi: flags not from the time taken */
     };
     const char    *name = "msr.write";
     struct variant v    = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_arg3 };
