@@ -109,6 +109,7 @@ between versions until the group itself changes.
 | 210 | `pg.smc.alias` | code patched through a second mapping of its own page |
 | 211 | `r3.basic` | code at CPL 3: arithmetic, memory, the stack, and what it can see (CS, SS, DS, PUSHFD, SMSW, STR, SLDT, SGDT) |
 | 212 | `r3.priv` | every privileged instruction at CPL 3: #GP(0) |
+| 213 | `r3.io` | port 80h by OUT, OUT DX, OUTSB with the TSS I/O bitmap allowing and denying, at IOPL 0 and 3; CLI by IOPL |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
