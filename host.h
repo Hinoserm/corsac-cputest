@@ -84,6 +84,16 @@ on_fault(int sig, siginfo_t *si, void *ctx)
     greg_t     *g  = uc->uc_mcontext.gregs;
     (void) si;
     g_fault.vec    = (sig == SIGILL) ? 6 : (sig == SIGFPE) ? 0 : 13;
+    if (sig == SIGTRAP) {
+        /* INT3, INT 3 and ICEBP: a trap, EIP already past the instruction. */
+        const uint8_t *ip = (const uint8_t *) g[REG_EIP];
+        if (ip[-1] == 0xcc)
+            g_fault.vec = 3;
+        else if (ip[-2] == 0xcd)
+            g_fault.vec = ip[-1];
+        else
+            g_fault.vec = 1;
+    }
     g_fault.err    = 0;
     g_fault.eip    = g[REG_EIP];
     g_fault.eflags = g[REG_EFL];
@@ -110,6 +120,7 @@ run_kernel(void *code)
         sigaction(SIGFPE, &sa, NULL);
         sigaction(SIGSEGV, &sa, NULL);
         sigaction(SIGBUS, &sa, NULL);
+        sigaction(SIGTRAP, &sa, NULL);
         installed = 1;
     }
     g_fault.vec = 0xff;
