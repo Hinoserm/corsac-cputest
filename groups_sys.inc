@@ -412,7 +412,7 @@ emit_sysc(struct emit *e, const struct variant *v)
 
 /* SYSENTER and SYSEXIT (Pentium II on: the Pentium Pro reports SEP but
    hasn't got them). The SYSENTER MSRs: CS (setup 100000h: 08h; 200000h:
-   04h, whose bits 15:2 aren't zero; neither: 0, #GP), ESP the ring-0
+   04h; neither: 0, the one value that is #GP), ESP the ring-0
    stack's top, EIP the landing point. SYSENTER lands at CPL 0 with CS 08h,
    SS 10h and IF, VM and RF clear; SYSEXIT, only from CPL 0, lands at CPL
    3 with CS 1Bh, SS 23h (the MSR plus 16 and 24), ESP from ECX and EIP

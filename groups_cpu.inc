@@ -115,7 +115,7 @@ group_msr_map(void)
         0x88, 0x116, 0x11e, 0x174, 0x175, 0x176, 0x17a, 0x187, 0xc2, 0x1d9, 0x1db, 0x1dc,    /* P6: L2, SYSENTER, counters, LBR */
         0x201, 0x20f, 0x258, 0x259, 0x268, 0x26f, 0x277, 0x400, 0x401, 0x402, 0x403,       /* P6: MTRRs, PAT, MC bank 0 */
         0x110, 0x120, 0x1107, 0x1108,                                                        /* WinChip MCR, Cyrix III FCR */
-        0x40000010, 0x80000010,                                                              /* the TSC with high ECX bits */
+        0x40000010, 0x80000010,                                                              /* the TSC with high ECX bits: a P6 ignores ECX 31:14 */
         0xc0000080, 0xc0000081, 0xc0000082, 0xc0000083, 0xc0000084, 0xc0000085, 0xc0000086, 0xc0000087, /* AMD K6 */
         0xc0010000, 0x40000000, 0xffffffff,
     };
