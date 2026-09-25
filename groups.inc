@@ -521,6 +521,7 @@ static const struct group_def groups[] = {
     G(group_lock_legal),
     G(group_segovr),
     G(group_lds_forms),
+    G(group_stack16),
 };
 
 /* Each group twice: counted first, so the status line knows how many are

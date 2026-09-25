@@ -195,3 +195,85 @@ group_lds_forms(void)
     }
     group_end(name);
 }
+
+/* ---- a 16-bit stack --------------------------------------------------------------- */
+
+/* SS on the 64 KB data segment (B = 0): pushes and pops move SP only (the
+   upper half of ESP stays as it was), into free memory at 7800h; CALL,
+   ENTER, PUSHA and PUSHFD on it; and SP wrapping at 0. ESP and SS are
+   put back after. */
+static void
+canon_stack16(const struct variant *v, const struct kin *in, struct kout *o)
+{
+    if (v->arg2 == 2) /* call: the pushed return address, relative to the code */
+        o->esi -= (uint32_t) g_cur_slot;
+}
+
+static void
+emit_stack16(struct emit *e, const struct variant *v)
+{
+    static const struct {
+        uint8_t len, b[12];
+    } body[] = {
+        { SEQ(0x50, 0x59) },                         /* push eax; pop ecx */
+        { SEQ(0x66, 0x50, 0x66, 0x5b) },             /* push ax; pop bx */
+        { SEQ(0xe8, 0x00, 0x00, 0x00, 0x00, 0x5e) }, /* call $+5; pop esi */
+        { SEQ(0xc8, 0x04, 0x00, 0x01) },             /* enter 4, 1 */
+        { SEQ(0x60, 0x61) },                         /* pushad; popad */
+        { SEQ(0x9c, 0x5e) },                         /* pushfd; pop esi */
+        { SEQ(0x6a, 0x7f, 0x8f, 0xc6) },             /* push 7Fh; pop esi */
+    };
+    int k = v->arg2;
+    e8(e, 0x89); /* mov [g_stack_save], esp */
+    e8(e, 0x25);
+    e32(e, (uint32_t) &g_stack_save);
+    e8(e, 0x66); /* mov ax, 20h; mov ss, ax */
+    e8(e, 0xb8);
+    e8(e, 0x20);
+    e8(e, 0x00);
+    e8(e, 0x8e);
+    e8(e, 0xd0);
+    e8(e, 0xbc); /* mov esp, value */
+    e32(e, v->arg3);
+    ebytes(e, body[k].b, body[k].len);
+    e8(e, 0x89); /* mov edx, esp */
+    e8(e, 0xe2);
+    e8(e, 0x66); /* mov ax, 10h; mov ss, ax; mov esp, [g_stack_save] */
+    e8(e, 0xb8);
+    e8(e, 0x10);
+    e8(e, 0x00);
+    e8(e, 0x8e);
+    e8(e, 0xd0);
+    e8(e, 0x8b);
+    e8(e, 0x25);
+    e32(e, (uint32_t) &g_stack_save);
+}
+
+static void
+group_stack16(void)
+{
+    static const uint32_t esps[] = { 0xabcd7810, 0x00007810, 0x12340002 };
+    const char           *name   = "stack16";
+    struct variant        v      = { .group = name, .faults_ok = 1, .emit = emit_stack16, .canon = canon_stack16,
+                                     .fx = FX_CUSTOM, .defmask = dm_fxarg, .fx_arg = 1 };
+#ifdef HOSTTEST
+    group_skip(name, "a 16-bit stack segment (host build)");
+    return;
+#endif
+    group_begin(name);
+    for (int k = 0; k < 7; k++) {
+        for (int s = 0; s < 3; s++) {
+            if (s == 2 && k != 0)
+                continue; /* SP wrapping at 0: once */
+            v.target[0]  = 0x5a; /* for the reports */
+            v.target[1]  = k;
+            v.target[2]  = s;
+            v.target_len = 3;
+            v.arg2       = k;
+            v.arg3       = esps[s];
+            v.fx_arg     = k != 5; /* PUSHFD holds the producer's undefined flags */
+            run_plain(&v, 1);
+        }
+    }
+    group_end(name);
+}
