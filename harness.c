@@ -369,6 +369,14 @@ static uint8_t g_lowbuf_host[LOWBUF_SIZE];
 /* Set by an input fixer when the variant can't run here (host build). */
 static int g_skip;
 
+/* Live status: each group is first counted (g_counting), then run; the
+   status line shows how far through it is. */
+static int      g_counting;
+static uint32_t g_expected;
+static int      g_group_no, g_group_count;
+static const char *g_group_name;
+static void status(void);
+
 /* ---- the emitter --------------------------------------------------------- */
 
 struct emit {
@@ -611,14 +619,14 @@ fill_input(void)
 }
 
 static void
-capture(struct kout *o, uint8_t *slot, int vec)
+capture(struct kout *o, uint8_t *slot, int vec, int mem)
 {
     *o          = g_out;
     o->flags   &= 0x0cd5;
     o->fault    = vec;
     memcpy(o->buf, g_buf, BUF_SIZE);
     memcpy(o->lowbuf, LOWBUF, LOWBUF_SIZE);
-    o->sandbox_crc = crc_add(0, SANDBOX, SANDBOX_SIZE);
+    o->sandbox_crc = mem ? crc_add(0, SANDBOX, SANDBOX_SIZE) : 0;
     if (vec != 0xff) {
         /* The registers at the fault, not the (unwritten) output record. */
         o->eax      = g_fault.eax;
@@ -732,6 +740,10 @@ run_variant(const struct variant *v)
         v->fix_input(v);
     if (g_skip)
         return;
+    if (g_counting) {
+        g_stats.tests++;
+        return;
+    }
     in = g_in;
 
     uint8_t    *slot = arena_alloc(160);
@@ -745,16 +757,22 @@ run_variant(const struct variant *v)
     ebytes(&e, v->target, v->target_len);
     emit_epilogue(&e);
 
+    /* Only the memory forms (those with an input fixer) touch memory: the
+       sandbox is refilled and checked for them alone. */
+    int mem = v->fix_input != 0;
     for (int r = 0; r < RUNS; r++) {
-        memset(SANDBOX, 0xa5, SANDBOX_SIZE);
+        if (mem)
+            memset(SANDBOX, 0xa5, SANDBOX_SIZE);
         memcpy(g_buf, in.buf, BUF_SIZE);
         memcpy(LOWBUF, in.lowbuf, LOWBUF_SIZE);
         memset(&g_out, 0, sizeof(g_out));
         int vec = run_kernel(slot);
-        capture(&out[r], slot, vec);
+        capture(&out[r], slot, vec, mem);
     }
 
     g_stats.tests++;
+    if ((g_stats.tests & 255) == 0 || g_stats.tests == g_expected)
+        status();
     if (out[0].fault != 0xff)
         g_stats.faults++;
     int bad = 0;
@@ -842,6 +860,54 @@ run_variant(const struct variant *v)
 
 static uint8_t g_group_post;
 
+/* The top line of the screen, redrawn in place; COM1 gets a line every
+   2048 tests. */
+static void
+status(void)
+{
+#ifndef HOSTTEST
+    char     line[80];
+    int      n    = 0;
+    uint32_t done = g_stats.tests, left = g_expected - g_stats.tests;
+    const char *p;
+    for (p = "RUNNING group "; *p; p++)
+        line[n++] = *p;
+    line[n++] = '0' + g_group_no;
+    line[n++] = '/';
+    line[n++] = '0' + g_group_count;
+    line[n++] = ' ';
+    for (p = g_group_name; *p && n < 40; p++)
+        line[n++] = *p;
+    for (p = ": done "; *p; p++)
+        line[n++] = *p;
+    char num[12];
+    int  k;
+    k = 0;
+    do { num[k++] = '0' + done % 10; done /= 10; } while (done);
+    while (k) line[n++] = num[--k];
+    for (p = ", left "; *p; p++)
+        line[n++] = *p;
+    k = 0;
+    do { num[k++] = '0' + left % 10; left /= 10; } while (left);
+    while (k) line[n++] = num[--k];
+    while (n < 80)
+        line[n++] = ' ';
+    for (int i = 0; i < 80; i++)
+        VGA[i] = 0x1f00 | (uint8_t) line[i]; /* white on blue */
+#endif
+    if ((g_stats.tests & 2047) == 0 || g_stats.tests == g_expected) {
+        vga_quiet = 1;
+        puts_("PROGRESS ");
+        puts_(g_group_name);
+        putch(' ');
+        putdec(g_stats.tests);
+        putch('/');
+        putdec(g_expected);
+        putch('\n');
+        vga_quiet = 0;
+    }
+}
+
 static void
 group_begin(const char *name)
 {
@@ -852,12 +918,24 @@ group_begin(const char *name)
     for (const char *p = name; *p; p++)
         seed = (seed ^ (uint8_t) *p) * 0x01000193;
     rng_state = seed | 1;
+    if (g_counting)
+        return;
+    g_group_name = name;
     post(++g_group_post);
+    puts_("START ");
+    puts_(name);
+    puts_(" tests=");
+    putdec(g_expected);
+    puts_("\n");
 }
 
 static void
 group_end(const char *name)
 {
+    if (g_counting) {
+        g_expected = g_stats.tests;
+        return;
+    }
     puts_("GROUP ");
     puts_(name);
     puts_(" tests=");

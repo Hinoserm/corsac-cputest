@@ -354,13 +354,21 @@ group_bt(void)
     group_end(name);
 }
 
+static void (*const groups[])(void) = {
+    group_alu, group_setcc, group_lahf_sahf, group_bswap, group_movx, group_bt,
+};
+
+/* Each group twice: counted first, so the status line knows how many are
+   left, then run. */
 static void
 run_groups(void)
 {
-    group_alu();
-    group_setcc();
-    group_lahf_sahf();
-    group_bswap();
-    group_movx();
-    group_bt();
+    g_group_count = sizeof(groups) / sizeof(groups[0]);
+    for (int i = 0; i < g_group_count; i++) {
+        g_group_no = i + 1;
+        g_counting = 1;
+        groups[i]();
+        g_counting = 0;
+        groups[i]();
+    }
 }
