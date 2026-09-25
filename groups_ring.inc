@@ -688,6 +688,9 @@ group_v86_ud(void)
    V86 vector table when the redirection bitmap says so (a handler at
    0:7F80 that increments DI) and faults when it doesn't. */
 #define V86_HANDLER 0x7f80u
+/* INT 60h's entry in the real-mode vector table. Through a variable, so
+   the compiler doesn't take the low address for a null pointer. */
+static uint32_t *volatile g_ivt60 = (uint32_t *) (0x60 * 4);
 
 static void
 group_v86_vme(void)
@@ -714,13 +717,13 @@ group_v86_vme(void)
         uint8_t *h = (uint8_t *) V86_HANDLER;
         h[0]       = 0x47; /* inc di */
         h[1]       = 0xcf; /* iret */
-        saved      = *(uint32_t *) (0x60 * 4);
-        *(uint32_t *) (0x60 * 4) = V86_HANDLER; /* 0000:7F80 */
+        saved      = *g_ivt60;
+        *g_ivt60   = V86_HANDLER; /* 0000:7F80 */
     }
 #endif
     ring_run("v86.vme", seqs, sizeof(seqs) / sizeof(seqs[0]), CR4_VME, 0, 0);
 #ifndef HOSTTEST
     if (!g_counting)
-        *(uint32_t *) (0x60 * 4) = saved;
+        *g_ivt60 = saved;
 #endif
 }
