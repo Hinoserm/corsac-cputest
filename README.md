@@ -77,11 +77,12 @@ so their CRCs stay comparable across versions. New groups only go at the end.
 | 21 | `mmx`         | every MMX instruction: arithmetic, packs, compares, shifts by register and immediate (with the #UD holes), MOVD/MOVQ |
 | 22 | `mmx.x87`     | EMMS and the x87 tag and status words after MMX, EMMS and FLD   |
 | 23 | `3dnow`       | 3DNow! and the K6-2+/K6-III+ extensions, FEMMS, PREFETCH(W)     |
+| 24 | `cmov`        | CMOVcc, all conditions, 16/32-bit, register and memory, after every producer (P6 on) |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
 it happened all go into the CRCs. Groups that need something the CPU lacks
-(a 486, CMPXCHG8B, MMX, 3DNow!) say so and are skipped.
+(a 486, CMPXCHG8B, MMX, 3DNow!, CMOV) say so and are skipped.
 
 In the 3DNow! group, only the exact operations go into `crc_defined`:
 compares, min/max, truncating conversions, PMULHRW, PAVGUSB and PSWAPD.
@@ -165,7 +166,9 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `rt.asm`     | runtime: GDT, IDT stubs, `run_kernel`, fault capture        |
 | `harness.c`  | emitter, runner, CRCs, serial and screen output             |
 | `groups.inc` | the first six groups, and the group table                   |
-| `groups_ops.inc` | groups 7 on                                               |
+| `groups_ops.inc` | groups 7-20                                               |
+| `groups_mmx.inc` | groups 21-23: MMX and 3DNow!                              |
+| `groups_p6.inc` | groups 24 on: Pentium Pro and later                        |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |
