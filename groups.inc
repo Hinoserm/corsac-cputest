@@ -366,6 +366,7 @@ static void (*const groups[])(void) = {
     group_bcd, group_string, group_popf, group_stack, group_far, group_int,
     group_bound_arpl, group_misc, group_mmx, group_mmx_x87, group_3dnow,
     group_cmov, group_rdtsc, group_nop_p6, group_smc,
+    group_segments,
 };
 
 /* Each group twice: counted first, so the status line knows how many are

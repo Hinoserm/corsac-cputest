@@ -81,6 +81,7 @@ so their CRCs stay comparable across versions. New groups only go at the end.
 | 25 | `rdtsc`       | two RDTSCs back to back: the difference is positive and small (Pentium on) |
 | 26 | `nop.p6`      | multi-byte NOP and the reserved NOPs 0F 19-1E: NOPs on P6, #UD before; its CRCs differ by family on purpose |
 | 27 | `smc`         | self-modifying code: patched immediates and opcodes, and a loop that repatches its own block; without a jump only in `crc_raw` (a 486 may run stale prefetched bytes) |
+| 28 | `segments`    | FS/GS loads of good, null, 16-bit, RPL-3, out-of-GDT and LDT selectors (#GP), limits, LFS/LGS, MOV from Sreg, LAR LSL VERR VERW |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
