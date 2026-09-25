@@ -411,32 +411,42 @@ emit_epilogue(struct emit *e)
 
 /* Instructions run before the one under test, to leave the flags in each
    of the lazy states the recompiler tracks. They use ECX and EDX only. */
+/* Flag bits. */
+#define F_CF 0x0001
+#define F_PF 0x0004
+#define F_AF 0x0010
+#define F_ZF 0x0040
+#define F_SF 0x0080
+#define F_OF 0x0800
+#define F_ARITH (F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF)
+
 struct producer {
     const char   *name;
     uint8_t       len;
     uint8_t       bytes[4];
+    uint16_t      undef; /* flags it leaves architecturally undefined */
 };
 
 static const struct producer producers[] = {
-    { "none", 0, { 0 } },
-    { "cmp", 2, { 0x39, 0xd1 } },
-    { "sub", 2, { 0x29, 0xd1 } },
-    { "add", 2, { 0x01, 0xd1 } },
-    { "adc", 2, { 0x11, 0xd1 } },
-    { "sbb", 2, { 0x19, 0xd1 } },
-    { "and", 2, { 0x21, 0xd1 } },
-    { "or", 2, { 0x09, 0xd1 } },
-    { "xor", 2, { 0x31, 0xd1 } },
-    { "test", 2, { 0x85, 0xd1 } },
-    { "inc", 1, { 0x41 } },
-    { "dec", 1, { 0x49 } },
-    { "neg", 2, { 0xf7, 0xd9 } },
-    { "shl1", 2, { 0xd1, 0xe1 } },
-    { "shr1", 2, { 0xd1, 0xe9 } },
-    { "sarcl", 2, { 0xd3, 0xf9 } },
-    { "rol1", 2, { 0xd1, 0xc1 } },
-    { "add8", 2, { 0x00, 0xd1 } },
-    { "sub16", 3, { 0x66, 0x29, 0xd1 } },
+    { "none", 0, { 0 }, 0 },
+    { "cmp", 2, { 0x39, 0xd1 }, 0 },
+    { "sub", 2, { 0x29, 0xd1 }, 0 },
+    { "add", 2, { 0x01, 0xd1 }, 0 },
+    { "adc", 2, { 0x11, 0xd1 }, 0 },
+    { "sbb", 2, { 0x19, 0xd1 }, 0 },
+    { "and", 2, { 0x21, 0xd1 }, F_AF },
+    { "or", 2, { 0x09, 0xd1 }, F_AF },
+    { "xor", 2, { 0x31, 0xd1 }, F_AF },
+    { "test", 2, { 0x85, 0xd1 }, F_AF },
+    { "inc", 1, { 0x41 }, 0 },
+    { "dec", 1, { 0x49 }, 0 },
+    { "neg", 2, { 0xf7, 0xd9 }, 0 },
+    { "shl1", 2, { 0xd1, 0xe1 }, F_AF },
+    { "shr1", 2, { 0xd1, 0xe9 }, F_AF },
+    { "sarcl", 2, { 0xd3, 0xf9 }, F_AF | F_OF },
+    { "rol1", 2, { 0xd1, 0xc1 }, 0 },
+    { "add8", 2, { 0x00, 0xd1 }, 0 },
+    { "sub16", 3, { 0x66, 0x29, 0xd1 }, 0 },
 };
 #define N_PRODUCERS (sizeof(producers) / sizeof(producers[0]))
 
@@ -447,6 +457,18 @@ extern struct fault  g_fault;
 
 /* What a test variant is: the bytes under test, what runs before them, and
    whether a jump puts them at the start of a block of their own. */
+/* What the instruction under test does to the flags, for the defined-result
+   CRC: which of its results are architecturally defined, given what the
+   producer before it left undefined. */
+enum {
+    FX_NONE,  /* flags untouched, results always defined */
+    FX_SETCC, /* fx_arg = condition; the result is undefined if it reads an undefined flag */
+    FX_LAHF_SAHF, /* fx_arg = the sequence, see lahf_sahf_effect() */
+    FX_BT,    /* CF defined, the others undefined */
+    FX_ALU,   /* fx_arg = the ALU operation, 0-7 */
+    FX_UNDEF  /* the result itself is undefined (BSWAP r16) */
+};
+
 struct variant {
     const char   *group;
     uint8_t       target[16];
@@ -455,12 +477,67 @@ struct variant {
     uint8_t       boundary;
     void        (*fix_input)(const struct variant *v);
     uint32_t      arg; /* for fix_input */
+    uint8_t       fx, fx_arg;
+    uint8_t       no_ref; /* depends on this machine (ESP, low buffer): not in the defined CRC */
 };
 
 struct group_stats {
     uint32_t tests, mismatches, faults;
     uint32_t crc_interp, crc_comp;
+    uint32_t defined, crc_defined;
 };
+
+/* The flags each SETcc condition reads. */
+static const uint16_t cc_reads[8] = {
+    F_OF, F_CF, F_ZF, F_CF | F_ZF, F_SF, F_PF, F_SF | F_OF, F_ZF | F_SF | F_OF
+};
+
+/* Fold one result into the defined-result CRC, masking what the
+   architecture leaves undefined. Returns 0 if nothing of it is defined. */
+static int
+defined_result(const struct variant *v, const struct kout *o, struct kout *d)
+{
+    uint16_t undef    = producers[v->producer].undef;
+    uint32_t eax_mask = 0xffffffff;
+
+    *d = *o;
+    switch (v->fx) {
+        case FX_NONE:
+            break;
+        case FX_SETCC:
+            if (cc_reads[v->fx_arg >> 1] & undef)
+                return 0;
+            break;
+        case FX_LAHF_SAHF: {
+            /* The sequence, one byte at a time: LAHF copies SF ZF AF PF CF
+               into AH (undefined ones too); SAHF copies them back. */
+            uint16_t ah_undef = 0;
+            for (int i = 0; i < v->target_len; i++) {
+                if (v->target[i] == 0x9f)
+                    ah_undef = undef & (F_SF | F_ZF | F_AF | F_PF | F_CF);
+                else
+                    undef = (undef & ~(F_SF | F_ZF | F_AF | F_PF | F_CF)) | ah_undef;
+            }
+            eax_mask = ~((uint32_t) ah_undef << 8);
+            break;
+        }
+        case FX_BT:
+            undef = (undef | F_ARITH) & ~F_CF;
+            break;
+        case FX_ALU:
+            /* add or adc sbb and sub xor cmp: all six written; AF undefined
+               after the logical ones. */
+            undef &= ~F_ARITH;
+            if (v->fx_arg == 1 || v->fx_arg == 4 || v->fx_arg == 6)
+                undef |= F_AF;
+            break;
+        default:
+            return 0;
+    }
+    d->flags &= ~undef;
+    d->eax &= eax_mask;
+    return 1;
+}
 
 static struct group_stats g_stats;
 static uint32_t           g_total_mismatches, g_total_tests;
@@ -642,6 +719,13 @@ run_variant(const struct variant *v)
     }
     g_stats.crc_interp = crc_add(g_stats.crc_interp, &out[0], sizeof(struct kout));
     g_stats.crc_comp   = crc_add(g_stats.crc_comp, &out[RUNS - 1], sizeof(struct kout));
+    if (!v->no_ref && out[0].fault == 0xff) {
+        struct kout d;
+        if (defined_result(v, &out[0], &d)) {
+            g_stats.defined++;
+            g_stats.crc_defined = crc_add(g_stats.crc_defined, &d, sizeof(d));
+        }
+    }
 }
 
 static uint8_t g_group_post;
@@ -674,6 +758,10 @@ group_end(const char *name)
     puthex(g_stats.crc_interp, 8);
     puts_(" crc_comp=");
     puthex(g_stats.crc_comp, 8);
+    puts_(" defined=");
+    putdec(g_stats.defined);
+    puts_(" crc_defined=");
+    puthex(g_stats.crc_defined, 8);
     puts_("\n");
     g_total_tests += g_stats.tests;
     g_total_mismatches += g_stats.mismatches;

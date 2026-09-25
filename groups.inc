@@ -103,6 +103,9 @@ group_alu(void)
                         v.target[n++] = MODRM_RR(reg, rm);
                         v.target_len  = n;
                         v.fix_input   = 0;
+                        v.fx          = FX_ALU;
+                        v.fx_arg      = op;
+                        v.no_ref      = size != 0 && (reg == R_ESP || rm == R_ESP);
                         v.producer    = 0;
                         v.boundary    = 0;
                         run_inputs(&v, 1);
@@ -149,6 +152,9 @@ group_setcc(void)
                 v.fix_input   = fix_mem16;
             }
             v.target_len = n;
+            v.fx         = FX_SETCC;
+            v.fx_arg     = cc;
+            v.no_ref     = form == 10;
             run_all_contexts(&v, 3);
         }
     }
@@ -168,6 +174,8 @@ group_lahf_sahf(void)
         memcpy(v.target, seqs[s], lens[s]);
         v.target_len = lens[s];
         v.fix_input  = 0;
+        v.fx         = FX_LAHF_SAHF;
+        v.no_ref     = 0;
         run_all_contexts(&v, 32);
     }
     group_end(name);
@@ -193,6 +201,8 @@ group_bswap(void)
             v.target[n++] = 0xc8 | r;
             v.target_len  = n;
             v.fix_input   = 0;
+            v.fx          = pfx ? FX_UNDEF : FX_NONE;
+            v.no_ref      = 0;
             run_some_contexts(&v, 8);
         }
     }
@@ -242,6 +252,9 @@ group_movx(void)
                     if (form == 10 && dst == R_EDI)
                         continue;
                     v.target_len = n;
+                    v.fx         = FX_NONE;
+                    /* SP as a word source; the low buffer's address */
+                    v.no_ref     = (form == R_ESP && (ops[o] & 1)) || form == 10;
                     run_some_contexts(&v, 2);
                 }
             }
@@ -276,6 +289,8 @@ group_bt(void)
                     v.target[n++] = MODRM_RR(src, dst);
                     v.target_len  = n;
                     v.fix_input   = 0;
+                    v.fx          = FX_BT;
+                    v.no_ref      = src == R_ESP;
                     run_some_contexts(&v, 2);
                 }
             }
@@ -293,6 +308,8 @@ group_bt(void)
                     v.target[n++] = imms[i];
                     v.target_len  = n;
                     v.fix_input   = 0;
+                    v.fx          = FX_BT;
+                    v.no_ref      = 0;
                     v.producer    = 0;
                     v.boundary    = 0;
                     run_inputs(&v, 1);
@@ -313,6 +330,8 @@ group_bt(void)
                 v.target_len  = n;
                 v.fix_input   = fix_mem_ebx;
                 v.arg         = 16;
+                v.fx          = FX_BT;
+                v.no_ref      = 0;
                 run_some_contexts(&v, 2);
             }
             /* bt [ebx], edx: the bit string reaches beyond the operand */
@@ -326,6 +345,8 @@ group_bt(void)
                 v.target_len  = n;
                 v.fix_input   = fix_bt_mem_reg;
                 v.arg         = size16;
+                v.fx          = FX_BT;
+                v.no_ref      = 0;
                 run_some_contexts(&v, 16);
             }
         }
