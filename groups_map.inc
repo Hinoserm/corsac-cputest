@@ -10,7 +10,8 @@
    - MOV to a control, debug or test register, and WRMSR;
    - RDTSC, RDMSR and RDPMC, whose results change between runs;
    - the near Jcc forms, which would jump into the trailer;
-   - PUSH/POP FS/GS, which unbalance the stack the test returns on.
+   - PUSH/POP FS/GS, which unbalance the stack the test returns on;
+   - 0F 38, SMINT on a Cyrix 6x86: into SMM if the BIOS enabled SMIs.
    And in the memory form only: the bit-string instructions with a
    register offset (they reach anywhere in memory) and LSS (a random SS). */
 static int
@@ -18,7 +19,7 @@ opmap_skip(int op, int mem)
 {
     if (op == 0x07 || op == 0x08 || (op >= 0x22 && op <= 0x27) || (op >= 0x30 && op <= 0x33) || (op >= 0x80 && op <= 0x8f))
         return 1;
-    if (op == 0xa0 || op == 0xa1 || op == 0xa8 || op == 0xa9)
+    if (op == 0xa0 || op == 0xa1 || op == 0xa8 || op == 0xa9 || op == 0x38)
         return 1;
     return mem && (op == 0xa3 || op == 0xab || op == 0xb3 || op == 0xbb || op == 0xb2);
 }
@@ -58,9 +59,3 @@ group_opmap(unsigned row)
     seg_restore(); /* LFS/LGS (0F B4, B5) load whatever they find */
     group_end(name);
 }
-
-#define OPMAP_GROUPS \
-    GA(group_opmap, 0), GA(group_opmap, 1), GA(group_opmap, 2), GA(group_opmap, 3), \
-    GA(group_opmap, 4), GA(group_opmap, 5), GA(group_opmap, 6), GA(group_opmap, 7), \
-    GA(group_opmap, 8), GA(group_opmap, 9), GA(group_opmap, 10), GA(group_opmap, 11), \
-    GA(group_opmap, 12), GA(group_opmap, 13), GA(group_opmap, 14), GA(group_opmap, 15),

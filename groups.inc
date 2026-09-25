@@ -413,6 +413,7 @@ static const struct group_def groups[] = {
     G(group_mov_forms), G(group_prefixes), G(group_code16),
     LOOP_GROUPS
     GA(group_opmap, 0),
+    GA(group_opmap, 1),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
