@@ -13,6 +13,8 @@ global  g_saved_esp
 global  g_fault
 global  gdt
 global  isr_48
+global  g_in_kernel
+extern  harness_fault
 
 section .text.entry
 _start:
@@ -55,9 +57,11 @@ run_kernel:
         pushad
         mov     [g_saved_esp], esp
         mov     dword [g_fault + FAULT_VEC], 0xff
+        mov     dword [g_in_kernel], 1
         call    eax
 kernel_return:
         cld
+        mov     dword [g_in_kernel], 0
         mov     ax, 0x10                ; a ring or V86 test may have left others
         mov     ds, ax
         mov     es, ax
@@ -144,8 +148,17 @@ isr_common:
         mov     [g_fault + FAULT_EIP], eax
         mov     eax, [esp + 48]
         mov     [g_fault + FAULT_EFLAGS], eax
+        cmp     dword [g_in_kernel], 0
+        je      .harness                ; not in a test: the harness itself faulted
         mov     esp, [g_saved_esp]
         jmp     kernel_return
+.harness:
+        mov     esp, panic_stack_top    ; a stack of its own: the old one may be the problem
+        call    harness_fault           ; prints everything and halts
+.halt:
+        cli
+        hlt
+        jmp     .halt
 
 section .rodata
         align   4
@@ -187,6 +200,10 @@ g_saved_esp:
         resd    1
 g_fault:
         resd    12
+g_in_kernel:                            ; 1 while a test runs: a fault then is its result
+        resd    1
         alignb  16
         resb    65536
 stack_top:
+        resb    8192                    ; for harness_fault
+panic_stack_top:

@@ -703,7 +703,6 @@ defined_result(const struct variant *v, const struct kin *in, const struct kout 
 
 static struct group_stats g_stats;
 static uint32_t           g_total_mismatches, g_total_tests;
-static uint32_t           g_printed;
 
 #define RUNS 4
 
@@ -975,105 +974,292 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
     }
 }
 
+/* ---- stopping: a mismatch, or a fault in the harness ------------------- */
+
+/* What is running, for the reports. */
+static const struct variant *g_cur_v;
+static uint8_t              *g_cur_slot, *g_cur_low;
+static uint32_t              g_cur_len, g_cur_low_len;
+
 static void
-print_out(const char *label, const struct kout *o)
+halt_forever(void)
 {
-    puts_("    ");
-    puts_(label);
-    puts_(" fl=");
-    puthex(o->flags, 4);
-    puts_(" a=");
-    puthex(o->eax, 8);
-    puts_(" c=");
-    puthex(o->ecx, 8);
-    puts_(" d=");
-    puthex(o->edx, 8);
-    puts_(" b=");
-    puthex(o->ebx, 8);
-    puts_(" bp=");
-    puthex(o->ebp, 8);
-    puts_(" si=");
-    puthex(o->esi, 8);
-    puts_(" di=");
-    puthex(o->edi, 8);
-    if (o->fault != 0xff) {
-        puts_(" FAULT ");
-        putdec(o->fault);
-        puts_(" ip+");
-        puthex(o->fault_ip, 4);
-    }
-    puts_("\n");
+#ifdef HOSTTEST
+    fflush(stdout);
+    exit(1);
+#else
+    for (;;)
+        __asm__ volatile("cli\n\thlt");
+#endif
+}
+
+/* The top line of the screen in red. */
+static void
+stop_banner(const char *what)
+{
+#ifndef HOSTTEST
+    char line[80];
+    int  n = 0;
+    for (const char *p = "STOPPED: "; *p; p++)
+        line[n++] = *p;
+    for (const char *p = what; *p && n < 60; p++)
+        line[n++] = *p;
+    for (const char *p = " - details on COM1"; *p && n < 80; p++)
+        line[n++] = *p;
+    while (n < 80)
+        line[n++] = ' ';
+    for (int i = 0; i < 80; i++)
+        VGA[i] = 0x4f00 | (uint8_t) line[i]; /* white on red */
+#else
+    (void) what;
+#endif
 }
 
 static void
-report_mismatch(const struct variant *v, const struct kin *in, const struct kout out[RUNS])
+hexdump(const char *label, const uint8_t *p, uint32_t n, int addr)
 {
-    g_printed++;
-    if (g_printed > 40)
-        return;
-    puts_("MISMATCH ");
-    puts_(v->group);
-    puts_(" bytes=");
-    for (int i = 0; i < v->target_len; i++) {
-        puthex(v->target[i], 2);
-        putch(' ');
-    }
-    puts_("after=");
-    puts_(producers[v->producer].name);
-    if (v->boundary)
-        puts_(" +jmp");
-    puts_("\n    in fl=");
-    puthex(in->flags, 4);
-    puts_(" a=");
-    puthex(in->eax, 8);
-    puts_(" c=");
-    puthex(in->ecx, 8);
-    puts_(" d=");
-    puthex(in->edx, 8);
-    puts_(" b=");
-    puthex(in->ebx, 8);
-    puts_(" bp=");
-    puthex(in->ebp, 8);
-    puts_(" si=");
-    puthex(in->esi, 8);
-    puts_(" di=");
-    puthex(in->edi, 8);
-    puts_("\n");
-    static const char *const labels[RUNS] = { "interp1", "interp2", "comp1  ", "comp2  " };
-    for (int r = 0; r < RUNS; r++)
-        print_out(labels[r], &out[r]);
-    for (int r = 1; r < RUNS; r++) {
-        if (memcmp_(out[r].buf, out[0].buf, BUF_SIZE) || memcmp_(out[r].lowbuf, out[0].lowbuf, LOWBUF_SIZE)) {
-            puts_("    memory differs in run ");
-            putdec(r + 1);
-            puts_("\n");
+    puts_("  ");
+    puts_(label);
+    puts_(" (");
+    putdec(n);
+    puts_(" bytes):\n");
+    for (uint32_t i = 0; i < n; i += 16) {
+        puts_("    ");
+        if (addr) {
+            puthex((uint32_t) p + i, 8);
+            puts_(": ");
+        } else {
+            puthex(i, 3);
+            puts_(": ");
         }
-    }
-    if (v->mmx) {
-        for (int r = 0; r < RUNS; r++) {
-            puts_("    run ");
-            putdec(r + 1);
-            puts_(" mm0-7");
-            for (int i = 7; i >= 0; i--) {
-                putch(' ');
-                puthex(g_mmx_runs[r][2 * i + 1], 8);
-                puthex(g_mmx_runs[r][2 * i], 8);
-                if (i == 4)
-                    puts_("\n              ");
-            }
-            puts_("\n");
+        for (uint32_t k = i; k < i + 16 && k < n; k++) {
+            puthex(p[k], 2);
+            putch(' ');
         }
-    }
-    for (int r = 0; r < RUNS; r++) {
-        if (out[r].sandbox_crc != out[0].sandbox_crc || r == 0) {
-            puts_("    run ");
-            putdec(r + 1);
-            puts_(" sandbox crc ");
-            puthex(out[r].sandbox_crc, 8);
-            puts_("\n");
-        }
+        putch('\n');
     }
 }
+
+static void
+put_kv(const char *k, uint32_t v, int digits)
+{
+    putch(' ');
+    puts_(k);
+    putch('=');
+    puthex(v, digits);
+}
+
+static void
+where_line(void)
+{
+    puts_("  group ");
+    puts_(g_group_name ? g_group_name : "(none)");
+    puts_(" (");
+    putdec(g_group_no);
+    putch('/');
+    putdec(g_group_count);
+    puts_("), test ");
+    putdec(g_stats.tests + 1);
+    puts_(" of ");
+    putdec(g_expected);
+    puts_(", pass ");
+    putdec(g_pass);
+    puts_("\n  cpu ");
+    if (g_cpu.has_cpuid) {
+        puts_(g_cpu.vendor);
+        put_kv("sig", g_cpu.signature, 4);
+        put_kv("features", g_cpu.features, 8);
+        put_kv("ext", g_cpu.ext_features, 8);
+    } else
+        puts_(g_cpu.is486 ? "486-no-cpuid" : "386");
+    if (g_cpu.cyrix)
+        puts_(" cyrix");
+#ifndef HOSTTEST
+    uint32_t cr0, cr2, cr3, cr4 = 0;
+    __asm__ volatile("mov %%cr0, %0\n\tmov %%cr2, %1\n\tmov %%cr3, %2" : "=r"(cr0), "=r"(cr2), "=r"(cr3));
+    if (g_cpu.has_cpuid)
+        __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    puts_("\n ");
+    put_kv("cr0", cr0, 8);
+    put_kv("cr2", cr2, 8);
+    put_kv("cr3", cr3, 8);
+    put_kv("cr4", cr4, 8);
+#endif
+    putch('\n');
+}
+
+static void
+variant_lines(const struct variant *v)
+{
+    if (!v) {
+        puts_("  (no variant running)\n");
+        return;
+    }
+    puts_("  variant: bytes");
+    for (int i = 0; i < v->target_len; i++) {
+        putch(' ');
+        puthex(v->target[i], 2);
+    }
+    puts_("\n   producer ");
+    puts_(producers[v->producer].name);
+    puts_(v->boundary ? " +jmp (a new block)" : " (same block)");
+    puts_("\n  ");
+    put_kv("fx", v->fx, 1);
+    put_kv("fx_arg", v->fx_arg, 2);
+    put_kv("arg", v->arg, 8);
+    put_kv("arg2", v->arg2, 8);
+    put_kv("arg3", v->arg3, 8);
+    put_kv("norm", v->norm, 2);
+    put_kv("flags_mask", v->flags_mask, 8);
+    puts_("\n  ");
+    put_kv("stack", v->stack, 1);
+    put_kv("mmx", v->mmx, 1);
+    put_kv("code16", v->code16, 1);
+    put_kv("paging", v->paging, 1);
+    put_kv("ring", v->ring, 1);
+    put_kv("ring_flags", v->ring_flags, 8);
+    put_kv("faults_ok", v->faults_ok, 1);
+    put_kv("no_ref", v->no_ref, 1);
+    put_kv("emitted", v->emit != 0, 1);
+    putch('\n');
+}
+
+static void
+regs_line(const char *label, uint32_t fl, const uint32_t *r7)
+{
+    static const char *const names[7] = { "eax", "ecx", "edx", "ebx", "ebp", "esi", "edi" };
+    puts_("  ");
+    puts_(label);
+    put_kv("fl", fl, 8);
+    for (int i = 0; i < 7; i++)
+        put_kv(names[i], r7[i], 8);
+    putch('\n');
+}
+
+/* Runs 1-4 disagreed: everything there is to know about this test, then
+   stop. */
+static void
+stop_mismatch(const struct variant *v, const struct kin *in, const struct kout out[RUNS])
+{
+    static const char *const labels[RUNS] = { "run 1 (interpreted)", "run 2 (interpreted, compiling)", "run 3 (compiled)", "run 4 (compiled again)" };
+    stop_banner("runs disagree");
+    vga_quiet = 0;
+    puts_("\n==== STOP: THE FOUR RUNS OF ONE TEST DISAGREE ====\n");
+    where_line();
+    variant_lines(v);
+    puts_("  INPUT\n");
+    regs_line("in ", in->flags, &in->eax);
+    hexdump("in buffer [g_buf]", in->buf, BUF_SIZE, 0);
+    hexdump("in low buffer", in->lowbuf, LOWBUF_SIZE, 0);
+    if (v->mmx)
+        hexdump("in mm0-mm7", (const uint8_t *) g_mmx_in, sizeof(g_mmx_in), 0);
+    puts_("  CODE\n");
+    hexdump("slot", g_cur_slot, g_cur_len, 1);
+    if (g_cur_low)
+        hexdump("V86 code", g_cur_low, g_cur_low_len, 1);
+    puts_("  RESULTS\n");
+    for (int r = 0; r < RUNS; r++) {
+        puts_("  ");
+        puts_(labels[r]);
+        putch('\n');
+        regs_line("   ", out[r].flags, &out[r].eax);
+        puts_("    ");
+        put_kv("fault", out[r].fault, 2);
+        put_kv("fault_ip", out[r].fault_ip, 8);
+        put_kv("fault_err", out[r].fault_err, 8);
+        put_kv("sandbox_crc", out[r].sandbox_crc, 8);
+        putch('\n');
+        hexdump("buffer", out[r].buf, BUF_SIZE, 0);
+        hexdump("low buffer", out[r].lowbuf, LOWBUF_SIZE, 0);
+        if (v->mmx)
+            hexdump("mm0-mm7", (const uint8_t *) g_mmx_runs[r], sizeof(g_mmx_runs[r]), 0);
+    }
+    puts_("  DIFFERENCES from run 1\n");
+    static const char *const fields[] = { "flags", "eax", "ecx", "edx", "ebx", "ebp", "esi", "edi", "fault", "fault_ip", "fault_err", "sandbox_crc" };
+    for (int r = 1; r < RUNS; r++) {
+        const uint32_t *a = &out[0].flags, *b = &out[r].flags;
+        puts_("    run ");
+        putdec(r + 1);
+        puts_(":");
+        int any = 0;
+        for (int f = 0; f < 12; f++) {
+            if (a[f] != b[f]) {
+                putch(' ');
+                puts_(fields[f]);
+                putch('(');
+                puthex(a[f], 8);
+                puts_("->");
+                puthex(b[f], 8);
+                putch(')');
+                any = 1;
+            }
+        }
+        for (int i = 0; i < BUF_SIZE; i++)
+            if (out[0].buf[i] != out[r].buf[i]) {
+                puts_(" buf[");
+                putdec(i);
+                puts_("](");
+                puthex(out[0].buf[i], 2);
+                puts_("->");
+                puthex(out[r].buf[i], 2);
+                putch(')');
+                any = 1;
+            }
+        for (int i = 0; i < LOWBUF_SIZE; i++)
+            if (out[0].lowbuf[i] != out[r].lowbuf[i]) {
+                puts_(" lowbuf[");
+                putdec(i);
+                puts_("](");
+                puthex(out[0].lowbuf[i], 2);
+                puts_("->");
+                puthex(out[r].lowbuf[i], 2);
+                putch(')');
+                any = 1;
+            }
+        if (v->mmx)
+            for (int i = 0; i < 16; i++)
+                if (g_mmx_runs[0][i] != g_mmx_runs[r][i]) {
+                    puts_(" mm");
+                    putdec(i / 2);
+                    puts_(i & 1 ? ".hi" : ".lo");
+                    any = 1;
+                }
+        if (!any)
+            puts_(" (the same: the difference is in the sandbox outside the buffer)");
+        putch('\n');
+    }
+    puts_("==== STOPPED. Nothing more runs; reset the machine to start again. ====\n");
+    halt_forever();
+}
+
+#ifndef HOSTTEST
+/* The fault handler found no test running: the harness itself faulted.
+   Called by isr_common on a stack of its own, with g_fault filled in. */
+void harness_fault(void);
+void
+harness_fault(void)
+{
+    uint32_t cr2;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+    stop_banner("fault in the harness");
+    vga_quiet = 0;
+    puts_("\n==== STOP: A FAULT IN THE HARNESS ITSELF, NOT IN A TEST ====\n ");
+    put_kv("vector", g_fault.vec, 2);
+    put_kv("error", g_fault.err, 8);
+    put_kv("eip", g_fault.eip, 8);
+    put_kv("eflags", g_fault.eflags, 8);
+    put_kv("cr2", cr2, 8);
+    putch('\n');
+    regs_line("at the fault", g_fault.eflags, &g_fault.eax);
+    puts_("  while (the last test started, or the one after it):\n");
+    where_line();
+    variant_lines(g_cur_v);
+    if (g_cur_slot)
+        hexdump("its slot", g_cur_slot, g_cur_len, 1);
+    puts_("==== STOPPED. Nothing more runs; reset the machine to start again. ====\n");
+    halt_forever();
+}
+#endif
 
 /* The producer, the block boundary if any, and the code under test. */
 static void
@@ -1186,6 +1372,8 @@ emit_ring(struct emit *e, const struct variant *v)
         emit_body(&c, v);
         e8(&c, 0xcd); /* int 30h */
         e8(&c, 0x30);
+        g_cur_low     = low;
+        g_cur_low_len = c.p - low;
     } else {
         put32_at(push_l, (uint32_t) e->p);
         e8(e, 0x66); /* mov ax, data selector; mov ds, ax; mov es, ax */
@@ -1235,6 +1423,7 @@ run_variant(const struct variant *v)
         len += v->target_len;
     uint8_t    *slot = arena_alloc(len);
     struct emit e    = { slot };
+    g_cur_low        = 0;
     if (v->ring)
         emit_ring(&e, v);
     else {
@@ -1301,6 +1490,9 @@ run_variant(const struct variant *v)
     /* Only the memory forms (those with an input fixer) and the stack
        variants touch memory: the sandbox is refilled and checked for them
        alone. */
+    g_cur_v    = v;
+    g_cur_slot = slot;
+    g_cur_len  = e.p - slot;
     int mem = (v->fix_input != 0 && !v->reg_fix) || v->stack;
 #ifndef HOSTTEST
     if (v->ring == 4)
@@ -1334,7 +1526,7 @@ run_variant(const struct variant *v)
             bad = 1;
     if (bad) {
         g_stats.mismatches++;
-        report_mismatch(v, &in, out);
+        stop_mismatch(v, &in, out);
     }
     g_stats.crc_interp = crc_add(g_stats.crc_interp, &out[0], sizeof(struct kout));
     g_stats.crc_comp   = crc_add(g_stats.crc_comp, &out[RUNS - 1], sizeof(struct kout));

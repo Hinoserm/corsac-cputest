@@ -38,9 +38,9 @@ Each copy is placed at an address never used for code before, and run four
 times on the same input. 86Box interprets a new block on its first run,
 interprets it again while compiling it on the second, and runs the compiled
 code from the third on. So runs 1-2 are the interpreter and runs 3-4 are the
-recompiler, and any difference between them is reported as a `MISMATCH` with
-the registers of all four runs. On real hardware all four runs are the same
-by definition.
+recompiler. Any difference between them stops the test with
+everything needed to see why, and the test stops. On real hardware all four
+runs must be the same too.
 
 Memory operands point into a 16 KB sandbox that is refilled before every run
 and CRC'd after it, so a wrong address shows up as a wrong result instead of
@@ -177,6 +177,21 @@ it takes.
   and once after an ADD across a block boundary.
 - **Four runs** per test: two interpreted, two compiled. The second
   compiled run is where anything the first one left behind shows up.
+
+## When something doesn't match
+
+If the four runs of a test disagree, the test **stops there**. The top line
+of the screen turns red, and COM1 gets everything about that test:
+- where it was: group, test number, pass, CPU, CR0/CR2/CR3/CR4;
+- the variant's settings and the producer before it;
+- the whole input: flags, registers, buffers, MMX registers;
+- every byte of the generated code, with addresses;
+- each run's complete result;
+- a list of what differs from run 1, field by field and byte by byte.
+
+A fault inside the harness itself (not in a test) stops it the same way,
+with the vector, error code, EIP, CR2, the registers and what was running,
+instead of crashing on.
 
 ## Output
 
