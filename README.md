@@ -139,6 +139,7 @@ between versions until the group itself changes.
 | 240 | `v86.ud` | protected-mode-only instructions in V86 (#UD), an address past 64 KB (#GP) |
 | 241 | `v86.vme` | VME: CLI/STI on VIF, PUSHF/POPF with VIF, INT 60h redirected through the V86 vector table or faulting |
 | 242 | `r3.limits` | FS on read/write, read-only, expand-down (32 and 16-bit), execute/read and execute-only code, page-granular, DPL-1 and missing descriptors at CPL 3, accessed either side of the limit |
+| 243 | `r2.limits` | the same at CPL 2 |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
