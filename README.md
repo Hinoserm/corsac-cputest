@@ -3,21 +3,16 @@
 A bare-metal x86 CPU accuracy test. I use it to check 86Box's recompiler
 against its interpreter, and both against real CPUs, from the 486 up.
 
-It runs with no OS at all, from either of these:
-
-- **`build/cputest.img`**: a 16 MB disk image. Write it to a CF card or hard disk
-  and boot it. The boot sector loads the test and calls it the way a BIOS
-  calls an option ROM.
-- **`build/cputest.rom`**: the same test as a 64 KB option ROM, for an ISA
-  ROM card at C8000h (86Box: *Generic ISA ROM Board*).
+It runs with no OS at all, from **`build/cputest.img`**: a 16 MB disk
+image. Write it to a CF card or a hard disk and boot it; the boot sector
+loads the test and starts it. In 86Box, attach it as the primary IDE disk.
 
 Output goes to COM1 at 115200 8N1, and to the screen. The top line of the
 screen shows live status. The first line out is `CPUTEST <version>`, then
-the CPU's vendor, signature and feature flags, and CR0 as the BIOS left it
-and as the tests run. The test turns the CPU's cache on (clears CR0.CD and
-NW): BIOSes call option ROMs with it off, and 86Box doesn't compile code
-while it is off, so without this a ROM-card run only tests the
-interpreter.
+the CPU's vendor, signature and feature flags, and CR0 as found and as the
+tests run. The test turns the CPU's cache on (clears CR0.CD and NW) if it
+was off: 86Box doesn't compile code while it is, so the recompiler would
+never be tested.
 
 ## Running it on real hardware
 
@@ -197,7 +192,7 @@ Three interpreter bugs in 86Box turned up this way, all in upstream master:
 Needs `nasm`, a GCC that can target i386 (`-m32`), and binutils.
 
 ```
-python3 build.py              # build/cputest.rom and build/cputest.img
+python3 build.py              # build/cputest.img
 python3 build.py --dump       # also prints one line per defined result (D) and raw result (R)
 python3 build.py --dump bcd   # the same, only for groups whose name starts with bcd
 python3 build.py --host       # build/cputest: a static i386 Linux ELF of the same harness
@@ -210,14 +205,14 @@ top of `build.py`.
 `diffdump.py REF.txt RUN.txt` compares two `--dump` outputs and groups the
 differences by instruction, producer and field.
 
-`run.py` boots the ROM or image in a headless 86Box. It relies on my own
+`run.py` boots the image in a headless 86Box. It relies on my own
 headless runner (not published), so it won't work elsewhere as it stands.
 
 ## Files
 
 | file         | what                                                        |
 |--------------|-------------------------------------------------------------|
-| `stub.asm`   | option ROM entry: A20, protected mode, copies the payload to 1 MB |
+| `stub.asm`   | the loader: A20, protected mode, copies the payload to 1 MB |
 | `rt.asm`     | runtime: GDT, IDT stubs, `run_kernel`, fault capture        |
 | `harness.c`  | emitter, runner, CRCs, serial and screen output             |
 | `groups.inc` | the first six groups, and the group table                   |

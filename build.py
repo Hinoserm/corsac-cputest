@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Build the CPU accuracy test option ROM: cputest.rom (32 KB, or 64 KB if
-the payload needs it), ready for an ISA ROM card at C8000h."""
+"""Build the CPU accuracy test: build/cputest.img, a 16 MB disk image to
+boot from a hard disk or a CF card."""
 
 import os
 import subprocess
@@ -60,32 +60,25 @@ def main():
     run(["objcopy", "-O", "binary", "payload.elf", "payload.bin"])
 
     payload = os.path.getsize(os.path.join(OUT, "payload.bin"))
-    # 32 or 64 KB fits an ISA ROM card; the disk image takes up to 127 KB.
-    for size in (32768, 65536, 130560):
-        if payload + 512 <= size:
-            break
-    else:
+    # The loader and payload, in whole 16 KB steps: the boot sector reads
+    # 32 sectors at a time, and loads to 1000:0000, below 640 KB.
+    size = (payload + 512 + 16383) // 16384 * 16384
+    if size > 0x80000:
         sys.exit("payload too large: %d bytes" % payload)
 
-    run(["nasm", "-f", "bin", "-DROM_BLOCKS=%d" % (size // 512), "-I", OUT + "/",
+    run(["nasm", "-f", "bin", "-DIMAGE_BLOCKS=%d" % min(size // 512, 255), "-I", OUT + "/",
          "-o", "stub.bin", os.path.join(HERE, "stub.asm")])
-    rom = bytearray(open(os.path.join(OUT, "stub.bin"), "rb").read())
-    if len(rom) > size - 1:
-        sys.exit("ROM too large: %d bytes" % len(rom))
-    rom += bytes(size - len(rom))
-    rom[-1] = (-sum(rom[:-1])) & 0xff
-    assert sum(rom) & 0xff == 0
-    path = os.path.join(OUT, "cputest.rom")
-    open(path, "wb").write(rom)
-    print("%s: %d bytes (payload %d)" % (path, size, payload))
+    loader = bytearray(open(os.path.join(OUT, "stub.bin"), "rb").read())
+    loader += bytes(size - len(loader))
+    print("loader and payload: %d bytes (payload %d)" % (size, payload))
 
-    # The same image behind a boot sector, for a disk or a CF card: the boot
-    # sector loads it and calls it the way a BIOS calls an option ROM.
+    # Behind a boot sector, for a disk or a CF card: the boot sector loads
+    # it and far-calls offset 3.
     run(["nasm", "-f", "bin", "-DIMAGE_SECTORS=%d" % (size // 512), "-o", "boot.bin",
          os.path.join(HERE, "boot.asm")])
     boot = open(os.path.join(OUT, "boot.bin"), "rb").read()
     assert len(boot) == 512 and boot[510:] == b"\x55\xaa"
-    img = boot + bytes(rom)
+    img = boot + bytes(loader)
     img += bytes((16 << 20) - len(img))  # 16 MB; dd writes it to the start of the card
     path = os.path.join(OUT, "cputest.img")
     open(path, "wb").write(img)

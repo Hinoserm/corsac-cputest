@@ -1,8 +1,9 @@
-; CPU accuracy test ROM: the option ROM entry.
+; CPU accuracy test: the loader.
 ;
-; The BIOS finds the 55AA signature during POST and far-calls offset 3 in
-; real mode. From here: interrupts off, A20 on, a flat GDT, protected mode,
-; the payload copied to 1 MB, and a jump to it. Nothing returns to the BIOS.
+; The boot sector loads this to 1000:0000 and far-calls offset 3 in real
+; mode (the layout of an option ROM, which it once also was). From here:
+; interrupts off, A20 on, a flat GDT, protected mode, the payload copied to
+; 1 MB, and a jump to it. Nothing returns.
 
 bits 16
 org 0
@@ -11,7 +12,7 @@ PAYLOAD_BASE equ 0x100000
 
 rom_start:
         db      0x55, 0xaa
-        db      ROM_BLOCKS              ; size in 512-byte blocks, set by build.py
+        db      IMAGE_BLOCKS            ; size in 512-byte blocks, set by build.py
         jmp     init
 
         align   16

@@ -1,5 +1,5 @@
 /*
- * CPU accuracy test ROM: the harness.
+ * CPU accuracy test: the harness.
  *
  * Every test is a few bytes of code generated here at run time: load the
  * flags and seven registers from an input record, optionally run an
@@ -344,7 +344,7 @@ idt_init(void)
 #define SLOT_ALIGN  64u
 #define PAGE_SIZE   4096u
 
-/* In the ROM these are fixed; the ELF build takes what the OS gives it. */
+/* On bare metal these are fixed; the ELF build takes what the OS gives it. */
 uint8_t        *g_sandbox = (uint8_t *) 0x00300000;
 static uint32_t g_arena_base = 0x00400000;
 static uint32_t g_arena_next, g_arena_end, g_arena_wraps;
@@ -1300,9 +1300,9 @@ cmain(uint32_t rom_base)
     ram_detect();
     arena_init();
 #ifndef HOSTTEST
-    /* The BIOS calls option ROMs with the cache disabled (CR0.CD), and
-       86Box interprets everything while it is: turn it on for the tests.
-       WBINVD exists from the 486 on. */
+    /* The cache may be off (CR0.CD), as a BIOS leaves it for option ROMs,
+       and 86Box interprets everything while it is: turn it on for the
+       tests. WBINVD exists from the 486 on. */
     uint32_t cr0_boot, cr0;
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0_boot));
     if (g_cpu.is486)
@@ -1312,7 +1312,7 @@ cmain(uint32_t rom_base)
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
 #endif
 
-    puts_("\nCPUTEST 3 rom=");
+    puts_("\nCPUTEST 3 load=");
     puthex(rom_base, 5);
     puts_(" ram=");
     putdec(g_ram_top >> 20);
@@ -1333,7 +1333,7 @@ cmain(uint32_t rom_base)
 #endif
     puts_("\n");
 
-    /* The ROM and the disk image go round again when they finish, for
+    /* The test goes round again when it finishes, for
        soaking a machine; every pass must print the same CRCs. The host
        build runs once. */
     for (g_pass = 1;; g_pass++) {

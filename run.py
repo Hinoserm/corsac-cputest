@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Run the CPU accuracy test ROM on a headless 86Box.
+"""Run the CPU accuracy test disk image on a headless 86Box.
 
   run.py [--machine 54tdp] [--cpu FAMILY SPEED MULTI] [--cpus N]
          [--interp] [--box PATH] [--display N] [--timeout S]
 
-Builds cputest.rom, writes a case folder under ~/src/86suite/machines
-(cputest-<machine>, no disks, the ROM on an ISA ROM card at C8000h, COM1 to
-this script), boots it through box86.py, and prints the ROM's report as it
+Builds cputest.img, writes a case folder under ~/src/86suite/machines
+(cputest-<machine>, the image as the primary IDE disk, COM1 to this
+script), boots it through box86.py, and prints the test's report as it
 arrives. Exits 0 on PASS, 1 on FAIL, 2 if the run never finished.
 """
 
@@ -65,16 +65,6 @@ fdd_02_type = none
 
 {attach}"""
 
-ATTACH_ROM = """[Other peripherals]
-isarom0_type = isarom
-
-[Generic ISA ROM Board #1]
-bios_fn = {rom}
-bios_addr = C8000
-bios_size = {romsize}
-rom_writes_enabled = 0
-"""
-
 # The CF-card image as the primary IDE disk: 16 MB, 64 cylinders, 16 heads,
 # 32 sectors.
 ATTACH_IMG = """[Hard disks]
@@ -95,19 +85,17 @@ def main():
     ap.add_argument("--timeout", type=int, default=1200)
     ap.add_argument("--tag", default="")
     ap.add_argument("--dump", action="store_true", help="print every defined result")
-    ap.add_argument("--img", action="store_true", help="boot cputest.img from the hard disk instead of the ROM card")
     args = ap.parse_args()
 
     subprocess.run([sys.executable, os.path.join(HERE, "build.py")] + (["--dump"] if args.dump else []),
                    check=True, stdout=subprocess.DEVNULL)
-    rom = os.path.join(HERE, "build", "cputest.rom")
 
     m = MACHINES[args.machine]
     family, speed, multi = args.cpu if args.cpu else m["cpu"]
     name = "cputest-" + args.machine + (("-" + args.tag) if args.tag else "")
     case = os.path.join(SUITE, "machines", name)
     os.makedirs(case, exist_ok=True)
-    # A fresh NVR every run: the ROM must not depend on what a last run left.
+    # A fresh NVR every run: the test must not depend on what a last run left.
     if os.path.exists(os.path.join(case, "nvr")):
         shutil.rmtree(os.path.join(case, "nvr"))
     shutil.copytree(m["nvr"], os.path.join(case, "nvr"))
@@ -117,14 +105,9 @@ def main():
     # underneath a run.
     box = os.path.join(case, "86Box.bin")
     shutil.copy2(args.box, box)
-    if args.img:
-        imgcopy = os.path.join(case, "cputest.img")
-        shutil.copy2(os.path.join(HERE, "build", "cputest.img"), imgcopy)
-        attach = ATTACH_IMG.format(img=imgcopy)
-    else:
-        romcopy = os.path.join(case, "cputest.rom")
-        shutil.copy2(rom, romcopy)
-        attach = ATTACH_ROM.format(rom=romcopy, romsize=os.path.getsize(romcopy))
+    imgcopy = os.path.join(case, "cputest.img")
+    shutil.copy2(os.path.join(HERE, "build", "cputest.img"), imgcopy)
+    attach = ATTACH_IMG.format(img=imgcopy)
     open(os.path.join(case, "86box.cfg"), "w").write(CFG.format(
         cpus=args.cpus, family=family, multi=multi, speed=speed, dynarec=0 if args.interp else 1,
         machine=m["machine"], gfxcard=m["gfxcard"], attach=attach))
@@ -149,7 +132,7 @@ def main():
                 print(text[shown:], end="", flush=True)
                 shown = len(text)
             done = [l for l in text.splitlines() if l.startswith("DONE ") and l.rstrip().endswith(("PASS", "FAIL"))]
-            if done:  # the ROM loops; the first pass is the answer
+            if done:  # the test loops; the first pass is the answer
                 result = 0 if done[0].rstrip().endswith("PASS") else 1
                 break
             if b.box.poll() is not None:
