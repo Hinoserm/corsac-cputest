@@ -390,6 +390,7 @@ group_bt(void)
 #include "groups_mem.inc"
 #include "groups_code16.inc"
 #include "groups_loop.inc"
+#include "groups_map.inc"
 
 /* The groups in order. A group is a function, or one of a family of
    parametrised ones (the sampled loops) with its index. */
@@ -411,6 +412,7 @@ static const struct group_def groups[] = {
     G(group_alu_mem), G(group_unary_mem), G(group_jcc_loop),
     G(group_mov_forms), G(group_prefixes), G(group_code16),
     LOOP_GROUPS
+    GA(group_opmap, 0),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
