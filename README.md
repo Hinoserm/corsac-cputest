@@ -89,6 +89,7 @@ between versions until the group itself changes.
 | 33 | `jcc.loop`    | all 16 Jcc, short and near, after every producer; JECXZ/JCXZ; LOOP/LOOPE/LOOPNE over a real body, 32- and 16-bit counts (CX = 0: 65536 times) |
 | 34 | `mov.forms`   | moffs A0-A3, C6/C7 through [reg+disp32] (a form 86Box's recompiler interprets on purpose), MOV to/from memory with high bytes, SIB, misaligned, FS:, CBW CWDE CWD CDQ |
 | 35 | `prefixes`    | repeated and ignored prefixes, prefix order, stacked segment overrides, branch hints, and the 15-byte limit (#GP at 16) |
+| 36 | `code16`      | code in a 16-bit protected-mode segment (Windows 3.x/9x, DOS extenders): ALU at 16 and 32 bits, SETcc and Jcc after every producer, every 16-bit address form, MOVZX/MOVSX, PUSH/POP/PUSHF, MUL/DIV edges, string ops over SI/DI, LOOP over CX, near CALL/RET |
 
 Groups 7 on are mostly instructions 86Box's recompiler still hands to the
 interpreter. Faults are results too: the vector, the error code and where
@@ -200,7 +201,8 @@ headless runner (not published), so it won't work elsewhere as it stands.
 | `groups_p6.inc` | groups 24-26: Pentium Pro and later                        |
 | `groups_more.inc` | groups 27-28                                             |
 | `groups_exhaust.inc` | group 29: exhaustive 8-bit flag math                  |
-| `groups_mem.inc` | groups 30 on: addressing and memory forms                 |
+| `groups_mem.inc` | groups 30-35: addressing and memory forms                 |
+| `groups_code16.inc` | group 36: 16-bit protected-mode code                   |
 | `host.h`     | the Linux side of the `--host` build                        |
 | `boot.asm`   | boot sector for the disk image                              |
 | `payload.ld` | links the payload at 1 MB                                   |

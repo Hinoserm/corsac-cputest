@@ -388,6 +388,7 @@ group_bt(void)
 #include "groups_more.inc"
 #include "groups_exhaust.inc"
 #include "groups_mem.inc"
+#include "groups_code16.inc"
 
 static void (*const groups[])(void) = {
     group_alu, group_setcc, group_lahf_sahf, group_bswap, group_movx, group_bt,
@@ -398,7 +399,7 @@ static void (*const groups[])(void) = {
     group_cmov, group_rdtsc, group_nop_p6, group_smc,
     group_segments, group_exhaust8, group_lea,
     group_alu_mem, group_unary_mem, group_jcc_loop,
-    group_mov_forms, group_prefixes,
+    group_mov_forms, group_prefixes, group_code16,
 };
 
 /* Each group twice: counted first, so the status line knows how many are

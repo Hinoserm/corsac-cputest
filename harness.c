@@ -550,6 +550,7 @@ struct variant {
     uint8_t       norm;          /* registers (1 << ModRM number) holding sandbox addresses */
     uint8_t       reg_fix;       /* fix_input sets registers only: no sandbox refill */
     uint8_t       mmx;           /* MM0-MM7 loaded from g_mmx_in, stored to g_mmx_out */
+    uint8_t       code16;        /* producer and target run in a 16-bit code segment */
     void        (*emit)(struct emit *e, const struct variant *v); /* instead of target[] */
     defmask_fn    defmask;
 };
@@ -701,6 +702,26 @@ uint32_t g_stack_save, g_stack_out;
 /* MMX variants: MM0-MM7 in and out (as 32-bit halves, low first), and
    where FNSTENV goes (outside the sandbox: it holds absolute addresses). */
 uint32_t g_mmx_in[16], g_mmx_out[16];
+
+/* 16-bit code: the far call goes through GDT selector 18h (16-bit code,
+   64 KB), whose base is moved to each variant's 16-bit code before it
+   runs, so that code too is at a fresh address every time. */
+#define SEL_CODE16 0x18
+#ifdef HOSTTEST
+static uint8_t gdt[0x28];
+#else
+extern uint8_t gdt[];
+#endif
+
+static void
+code16_base(uint32_t base)
+{
+    uint8_t *d = gdt + SEL_CODE16;
+    d[2]       = base;
+    d[3]       = base >> 8;
+    d[4]       = base >> 16;
+    d[7]       = base >> 24;
+}
 uint32_t g_fenv[7];
 static uint32_t g_mmx_runs[4][16];
 
@@ -728,7 +749,8 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
         o->esi      = g_fault.esi;
         o->edi      = g_fault.edi;
         o->flags    = g_fault.eflags & fmask;
-        o->fault_ip = g_fault.eip - (uint32_t) slot;
+        /* In 16-bit code the IP is already relative to the code. */
+        o->fault_ip = v->code16 ? g_fault.eip : g_fault.eip - (uint32_t) slot;
         o->fault_err = g_fault.err;
     }
 }
@@ -833,6 +855,21 @@ report_mismatch(const struct variant *v, const struct kin *in, const struct kout
     }
 }
 
+/* The producer, the block boundary if any, and the code under test. */
+static void
+emit_body(struct emit *e, const struct variant *v)
+{
+    ebytes(e, producers[v->producer].bytes, producers[v->producer].len);
+    if (v->boundary) {
+        e8(e, 0xeb); /* jmp $+2: the test starts a new block */
+        e8(e, 0x00);
+    }
+    if (v->emit)
+        v->emit(e, v);
+    else
+        ebytes(e, v->target, v->target_len);
+}
+
 /* One variant with one input, run four times from a fresh address. */
 static void
 run_variant(const struct variant *v)
@@ -847,6 +884,10 @@ run_variant(const struct variant *v)
     g_skip = 0;
     if (v->fix_input)
         v->fix_input(v);
+#ifdef HOSTTEST
+    if (v->code16)
+        g_skip = 1; /* no far calls into our own GDT in a Linux process */
+#endif
     if (g_skip)
         return;
     if (g_counting) {
@@ -856,7 +897,7 @@ run_variant(const struct variant *v)
     in = g_in;
 
     int         big  = v->emit || v->stack;
-    uint32_t    len  = v->mmx ? 384 : big ? 256 : 160;
+    uint32_t    len  = v->mmx || v->code16 ? 384 : big ? 256 : 160;
     if (v->target_len > 16) /* room for a long target on top */
         len += v->target_len;
     uint8_t    *slot = arena_alloc(len);
@@ -879,15 +920,20 @@ run_variant(const struct variant *v)
             e32(&e, (uint32_t) &g_mmx_in[2 * i]);
         }
     }
-    ebytes(&e, producers[v->producer].bytes, producers[v->producer].len);
-    if (v->boundary) {
-        e8(&e, 0xeb); /* jmp $+2: the test starts a new block */
+    if (v->code16) {
+        e8(&e, 0x9a); /* call far 18h:0000; the 16-bit part follows the epilogue */
+        e32(&e, 0);
+        e8(&e, SEL_CODE16);
         e8(&e, 0x00);
-    }
-    if (v->emit)
-        v->emit(&e, v);
-    else
-        ebytes(&e, v->target, v->target_len);
+        if (v->stack) {
+            /* wipe the return address the call left on the private stack */
+            static const uint8_t scrub[2][8] = { { 0xc7, 0x44, 0x24, 0xf8, 0, 0, 0, 0 },
+                                                 { 0xc7, 0x44, 0x24, 0xfc, 0, 0, 0, 0 } };
+            ebytes(&e, scrub[0], 8);
+            ebytes(&e, scrub[1], 8);
+        }
+    } else
+        emit_body(&e, v);
     if (v->mmx) {
         for (int i = 0; i < 8; i++) {
             e8(&e, 0x0f); /* movq [g_mmx_out + 8*I], mmI */
@@ -907,6 +953,12 @@ run_variant(const struct variant *v)
         e32(&e, (uint32_t) &g_stack_save);
     }
     emit_epilogue(&e, v->stack || v->flags_mask);
+    if (v->code16) {
+        code16_base((uint32_t) e.p);
+        emit_body(&e, v);
+        e8(&e, 0x66); /* o32 retf: back to the 32-bit caller */
+        e8(&e, 0xcb);
+    }
 
     /* Only the memory forms (those with an input fixer) and the stack
        variants touch memory: the sandbox is refilled and checked for them

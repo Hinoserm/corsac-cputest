@@ -11,6 +11,7 @@ global  run_kernel
 global  isr_table
 global  g_saved_esp
 global  g_fault
+global  gdt
 
 section .text.entry
 _start:
