@@ -443,6 +443,7 @@ static const struct group_def groups[] = {
     G(group_pg_ad),
     G(group_pg_tlb),
     G(group_pg_pse),
+    G(group_pg_string),
 };
 
 /* Each group twice: counted first, so the status line knows how many are
