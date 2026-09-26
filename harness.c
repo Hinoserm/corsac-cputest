@@ -1421,7 +1421,7 @@ stop_mismatch(const struct variant *v, const struct kin *in, const struct kout o
                     any = 1;
                 }
         if (!any)
-            puts_(" (the same: the difference is in the sandbox outside the buffer)");
+            puts_(" the same as run 1"); /* sandbox_crc is compared above */
         putch('\n');
     }
     puts_("==== STOPPED. Nothing more runs; reset the machine to start again. ====\n");
