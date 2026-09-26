@@ -480,7 +480,7 @@ static const struct group_def groups[] = {
     G(group_alu), G(group_setcc), G(group_lahf_sahf), G(group_bswap), G(group_movx), G(group_bt),
     G(group_imul), G(group_muldiv), G(group_shift), G(group_shd), G(group_bs), G(group_cmpxchg),
     G(group_bcd), G(group_string), G(group_popf), G(group_stack), G(group_far), G(group_int),
-    G(group_bound_arpl), G(group_misc), G(group_mmx), G(group_mmx_x87), G(group_3dnow),
+    G(group_bound_arpl), G(group_misc), G(group_x87), G(group_mmx), G(group_mmx_x87), G(group_3dnow),
     G(group_cmov), G(group_rdtsc), G(group_nop_p6), G(group_smc),
     G(group_segments), G(group_exhaust8), G(group_lea),
     G(group_alu_mem), G(group_unary_mem), G(group_jcc_loop),

@@ -117,6 +117,467 @@ mmx_emmi(const char *name)
 #endif
 }
 
+/* ---- x87 ------------------------------------------------------------------ */
+
+/* Every x87 variant starts with FNINIT (and FLDCW for another rounding
+   mode), loads 7 or 8 qwords from the buffer onto the stack, runs the
+   instruction, takes the tag and status words (FNSTENV: ESI, EDI), stores
+   all eight registers back over the buffer with FSTP (empty ones as the
+   indefinite) and takes the status word again (AX). An instruction that
+   writes memory writes 64 bytes up, [EBX+40h], and the ten bytes there
+   come back in ECX, EDX and BP; one that reads memory reads the last
+   qword, [EBX+38h], which then isn't loaded onto the stack. Filling all
+   eight registers moves every one of them, at every stack position, in
+   and out of the compiled code in one block. */
+
+#define CPUID_FPU  (1u << 0)
+#define CPUID_CMOV (1u << 15)
+
+enum {
+    X_SRC  = 1 << 0,  /* reads [ebx+38h]: seven registers loaded */
+    X_DST  = 1 << 1,  /* writes [ebx+40h] */
+    X_INT  = 1 << 2,  /* [ebx+38h] holds an integer, not a double */
+    X_RC   = 1 << 3,  /* run under all four rounding modes */
+    X_P6   = 1 << 4,  /* FCMOVcc, FCOMI: CPUID CMOV */
+    X_PUSH = 1 << 5,  /* pushes: seven registers loaded, and eight (overflow) */
+    X_CC   = 1 << 6,  /* sets C0, C2 and C3 (compares, FXAM, FPREM); else they're undefined */
+    X_APPX = 1 << 7,  /* transcendental: the result differs between models */
+};
+
+static const uint16_t x87_cw[4] = { 0x037f, 0x077f, 0x0b7f, 0x0f7f };
+
+/* Doubles for the stack: zeros, small integers and halves (rounding),
+   the integer limits (FIST overflow), large and tiny, infinities, a NaN,
+   a denormal. */
+static const uint32_t x87_doubles[][2] = {
+    { 0x00000000, 0x00000000 }, { 0x00000000, 0x80000000 }, { 0x00000000, 0x3ff00000 },
+    { 0x00000000, 0xbff00000 }, { 0x00000000, 0x3fe00000 }, { 0x00000000, 0x3ff80000 },
+    { 0x00000000, 0x40040000 }, { 0x00000000, 0xc0040000 }, { 0x00000000, 0x40080000 },
+    { 0x9999999a, 0x3fb99999 }, { 0x55555555, 0x3fd55555 }, { 0x20000000, 0x4202a05f },
+    { 0x00000000, 0x43400000 }, { 0x00000001, 0x43400000 }, { 0x00000000, 0x43e00000 },
+    { 0x00000000, 0xc3e00000 }, { 0x00000000, 0x43f00000 }, { 0x00000000, 0x40dfffe0 },
+    { 0x00000000, 0xc0e00010 }, { 0xffe00000, 0x41dfffff }, { 0x00000000, 0xc1e00000 },
+    { 0xcae1ce65, 0x7e37e43c }, { 0x1bd5f0b6, 0x01a56e1f }, { 0x00000000, 0x7ff00000 },
+    { 0x00000000, 0xfff00000 }, { 0x00000000, 0x7ff80000 }, { 0x00000001, 0x00000000 },
+    { 0xffffffff, 0x7fefffff }, { 0x54442d18, 0x400921fb }, { 0x00000000, 0x40efffe0 },
+};
+#define N_X87_DOUBLES (sizeof(x87_doubles) / sizeof(x87_doubles[0]))
+
+/* Integers for FILD and FIADD: the limits of each size, 2^53 + 1 (not a
+   double), and mixed patterns. */
+static const uint32_t x87_ints[][2] = {
+    { 0, 0 },          { 1, 0 },          { 0xffffffff, 0xffffffff }, { 0xffffffff, 0x7fffffff },
+    { 0, 0x80000000 }, { 1, 0x00200000 }, { 0xffffffff, 0 },          { 0x9abcdef1, 0x12345678 },
+    { 0x7fff, 0 },     { 0x8000, 0 },     { 0x7fffffff, 0 },          { 0x80000000, 0 },
+};
+#define N_X87_INTS (sizeof(x87_ints) / sizeof(x87_ints[0]))
+
+/* A double between 2^-15 and 2^16, either sign. */
+static void
+x87_rnd_double(uint8_t *p)
+{
+    uint32_t hi = (0x3f000000 + (rnd() & 0x01ffffff)) | (rnd() & 0x80000000);
+    put_le(p, rnd(), 4);
+    put_le(p + 4, hi, 4);
+}
+
+/* arg3: the row, to start each one at a different place in the table. */
+static void
+fix_x87(const struct variant *v)
+{
+    g_in.ebx = (uint32_t) g_buf;
+    for (int i = 0; i < 8; i++) {
+        uint8_t *p = g_in.buf + 8 * i;
+        if (i == 7 && (v->arg2 & X_INT)) {
+            int      e = edge(N_X87_INTS);
+            uint32_t k = e >= 0 ? (uint32_t) e : rnd() % (N_X87_INTS + 1);
+            if (k < N_X87_INTS) {
+                put_le(p, x87_ints[k][0], 4);
+                put_le(p + 4, x87_ints[k][1], 4);
+            } else {
+                put_le(p, rnd(), 4);
+                put_le(p + 4, rnd(), 4);
+            }
+        } else if (g_case < 2) {
+            unsigned k = (g_case * 8 + i * 5 + v->arg3 * 7) % N_X87_DOUBLES;
+            put_le(p, x87_doubles[k][0], 4);
+            put_le(p + 4, x87_doubles[k][1], 4);
+        } else
+            x87_rnd_double(p);
+    }
+}
+
+/* fx_arg: the rounding mode; arg: how many registers to load; arg2: the
+   X_ flags. */
+static void
+emit_x87(struct emit *e, const struct variant *v)
+{
+    e8(e, 0xdb); /* fninit */
+    e8(e, 0xe3);
+    if (v->fx_arg) {
+        e8(e, 0xd9); /* fldcw [x87_cw + 2*rc] */
+        e8(e, 0x2d);
+        e32(e, (uint32_t) &x87_cw[v->fx_arg]);
+    }
+    for (uint32_t i = 0; i < v->arg; i++) {
+        e8(e, 0xdd); /* fld qword [ebx+8*i] */
+        e8(e, 0x43);
+        e8(e, 8 * i);
+    }
+    ebytes(e, v->target, v->target_len);
+    ebytes(e, (const uint8_t[]) { 0xd9, 0x35 }, 2); /* fnstenv [g_fenv] */
+    e32(e, (uint32_t) &g_fenv[0]);
+    ebytes(e, (const uint8_t[]) { 0x0f, 0xb7, 0x35 }, 3); /* movzx esi, word [tag word] */
+    e32(e, (uint32_t) &g_fenv[2]);
+    ebytes(e, (const uint8_t[]) { 0x0f, 0xb7, 0x3d }, 3); /* movzx edi, word [status word] */
+    e32(e, (uint32_t) &g_fenv[1]);
+    if (v->arg2 & X_DST)
+        ebytes(e, (const uint8_t[]) { 0x8b, 0x4b, 0x40, 0x8b, 0x53, 0x44, 0x0f, 0xb7, 0x6b, 0x48 }, 10); /* mov ecx, [ebx+40h]; mov edx, [ebx+44h]; movzx ebp, word [ebx+48h] */
+    for (int i = 0; i < 8; i++) {
+        e8(e, 0xdd); /* fstp qword [ebx+8*i] */
+        e8(e, 0x5b);
+        e8(e, 8 * i);
+    }
+    e8(e, 0xdf); /* fnstsw ax */
+    e8(e, 0xe0);
+}
+
+/* C0, C2 and C3 are undefined after most instructions; C1 is not. The
+   transcendentals round differently from model to model. */
+static int
+dm_x87(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    if (v->arg2 & X_APPX)
+        return 0;
+    if (!(v->arg2 & X_CC)) {
+        d->edi &= ~0x4500u;
+        d->eax &= ~0x4500u;
+    }
+    return 1;
+}
+
+/* The same memory forms inside a loop run 64 times, so the recompiler
+   compiles the body while the test is running, with every general
+   register live: ECX counts, EBX points at the buffer, ESI and EDI sum
+   the integer FISTP writes, EDX the double FST writes, EBP the status
+   words; the x87 stack holds arg registers from the buffer besides the
+   two the body uses. One body per iteration:
+
+     fild qword [ebx]          m64int in
+     fadd qword [ebx+8]        m64fp arithmetic, each kind
+     fmul qword [ebx+10h]
+     fsub qword [ebx+18h]
+     fdiv qword [ebx+20h]
+     fld qword [ebx+28h]
+     fcomp qword [ebx+30h]     compare, status into EBP
+     fnstsw ax; xor ebp, eax
+     fst qword [ebx+28h]       m64fp out, fed to the next FLD
+     fistp qword [ebx]         m64int out, fed to the next FILD
+     (jmp $+2 when arg3 is 1: a block boundary inside the loop)
+     add esi, [ebx]; adc edi, [ebx+4]; xor edx, [ebx+28h]; rol edx, 1
+     dec ecx; jnz
+
+   After the loop the final status word goes to AX and the stack to the
+   buffer as in the other x87 variants. */
+static void
+emit_x87_loop(struct emit *e, const struct variant *v)
+{
+    static const uint8_t body[] = {
+        0xdf, 0x2b,             /* fild qword [ebx] */
+        0xdc, 0x43, 0x08,       /* fadd qword [ebx+8] */
+        0xdc, 0x4b, 0x10,       /* fmul qword [ebx+10h] */
+        0xdc, 0x63, 0x18,       /* fsub qword [ebx+18h] */
+        0xdc, 0x73, 0x20,       /* fdiv qword [ebx+20h] */
+        0xdd, 0x43, 0x28,       /* fld qword [ebx+28h] */
+        0xdc, 0x5b, 0x30,       /* fcomp qword [ebx+30h] */
+        0xdf, 0xe0,             /* fnstsw ax */
+        0x31, 0xc5,             /* xor ebp, eax */
+        0xdd, 0x53, 0x28,       /* fst qword [ebx+28h] */
+        0xdf, 0x3b,             /* fistp qword [ebx] */
+    };
+    static const uint8_t tail[] = {
+        0x03, 0x33,             /* add esi, [ebx] */
+        0x13, 0x7b, 0x04,       /* adc edi, [ebx+4] */
+        0x33, 0x53, 0x28,       /* xor edx, [ebx+28h] */
+        0xd1, 0xc2,             /* rol edx, 1 */
+        0x49,                   /* dec ecx */
+    };
+    e8(e, 0xdb); /* fninit */
+    e8(e, 0xe3);
+    if (v->fx_arg) {
+        e8(e, 0xd9); /* fldcw [x87_cw + 2*rc] */
+        e8(e, 0x2d);
+        e32(e, (uint32_t) &x87_cw[v->fx_arg]);
+    }
+    for (uint32_t i = 0; i < v->arg; i++) {
+        e8(e, 0xdd); /* fld qword [ebx+38h]: the spare qword, arg deep */
+        e8(e, 0x43);
+        e8(e, 0x38);
+    }
+    e8(e, 0xb9); /* mov ecx, 64 */
+    e32(e, 64);
+    uint8_t *top = e->p;
+    ebytes(e, body, sizeof(body));
+    if (v->arg3) {
+        e8(e, 0xeb); /* jmp $+2 */
+        e8(e, 0x00);
+    }
+    ebytes(e, tail, sizeof(tail));
+    e8(e, 0x0f); /* jnz top */
+    e8(e, 0x85);
+    e32(e, (uint32_t) (top - (e->p + 4)));
+    e8(e, 0xdf); /* fnstsw ax */
+    e8(e, 0xe0);
+    for (int i = 0; i < 8; i++) {
+        e8(e, 0xdd); /* fstp qword [ebx+8*i] */
+        e8(e, 0x5b);
+        e8(e, 8 * i);
+    }
+}
+
+/* The loop's input: an integer at [ebx], doubles after it. */
+static void
+fix_x87_loop(const struct variant *v)
+{
+    g_in.ebx = (uint32_t) g_buf;
+    for (int i = 1; i < 8; i++) {
+        uint8_t *p = g_in.buf + 8 * i;
+        if (g_case < 2) {
+            unsigned k = (g_case * 8 + i * 5 + v->fx_arg * 3) % N_X87_DOUBLES;
+            put_le(p, x87_doubles[k][0], 4);
+            put_le(p + 4, x87_doubles[k][1], 4);
+        } else
+            x87_rnd_double(p);
+    }
+    int      e = edge(N_X87_INTS);
+    uint32_t k = e >= 0 ? (uint32_t) e : N_X87_INTS;
+    put_le(g_in.buf, k < N_X87_INTS ? x87_ints[k][0] : rnd(), 4);
+    put_le(g_in.buf + 4, k < N_X87_INTS ? x87_ints[k][1] : rnd() & 0x000fffff, 4);
+}
+
+/* EBP sums status words FCOMP has just set, all of them defined; the
+   final status (AX) follows the FSTPs, which leave C0, C2 and C3
+   undefined. */
+static int
+dm_x87_loop(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    d->eax &= ~0x4500u;
+    return 1;
+}
+
+static int
+has_fpu(void)
+{
+    if (g_cpu.has_cpuid)
+        return g_cpu.features & CPUID_FPU;
+#ifdef HOSTTEST
+    return 1;
+#else
+    uint16_t sw = 0x5a5a;
+    __asm__ volatile("fninit\n\tfnstsw %0" : "+m"(sw));
+    return sw == 0;
+#endif
+}
+
+static void
+group_x87(void)
+{
+    /* Register forms: ESC byte, ModRM with ST(i) in the low three bits,
+       ST(0)-ST(7) each. The aliases (DC D0, DD C8, DE D0, DF C0-D8, D9 D8)
+       are in; DE D8+i, DA E8+i and the rest of the holes are the opmap
+       group's. */
+    static const struct {
+        uint8_t esc, modrm, flags;
+    } regops[] = {
+        { 0xd8, 0xc0, 0 },             { 0xd8, 0xc8, 0 },     { 0xd8, 0xd0, X_CC },          { 0xd8, 0xd8, X_CC },
+        { 0xd8, 0xe0, 0 },             { 0xd8, 0xe8, 0 },     { 0xd8, 0xf0, 0 },             { 0xd8, 0xf8, 0 },
+        { 0xd9, 0xc0, X_PUSH },        { 0xd9, 0xc8, 0 },     { 0xd9, 0xd8, 0 },
+        { 0xda, 0xc0, X_P6 },          { 0xda, 0xc8, X_P6 },  { 0xda, 0xd0, X_P6 },          { 0xda, 0xd8, X_P6 },
+        { 0xdb, 0xc0, X_P6 },          { 0xdb, 0xc8, X_P6 },  { 0xdb, 0xd0, X_P6 },          { 0xdb, 0xd8, X_P6 },
+        { 0xdb, 0xe8, X_P6 | X_CC },   { 0xdb, 0xf0, X_P6 | X_CC },
+        { 0xdc, 0xc0, 0 },             { 0xdc, 0xc8, 0 },     { 0xdc, 0xd0, X_CC },          { 0xdc, 0xd8, X_CC },
+        { 0xdc, 0xe0, 0 },             { 0xdc, 0xe8, 0 },     { 0xdc, 0xf0, 0 },             { 0xdc, 0xf8, 0 },
+        { 0xdd, 0xc0, 0 },             { 0xdd, 0xc8, 0 },     { 0xdd, 0xd0, 0 },             { 0xdd, 0xd8, 0 },
+        { 0xdd, 0xe0, X_CC },          { 0xdd, 0xe8, X_CC },
+        { 0xde, 0xc0, 0 },             { 0xde, 0xc8, 0 },     { 0xde, 0xd0, X_CC },
+        { 0xde, 0xe0, 0 },             { 0xde, 0xe8, 0 },     { 0xde, 0xf0, 0 },             { 0xde, 0xf8, 0 },
+        { 0xdf, 0xc0, 0 },             { 0xdf, 0xc8, 0 },     { 0xdf, 0xd0, 0 },             { 0xdf, 0xd8, 0 },
+        { 0xdf, 0xe8, X_P6 | X_CC },   { 0xdf, 0xf0, X_P6 | X_CC },
+    };
+    /* No operand. */
+    static const struct {
+        uint8_t esc, op, flags;
+    } ops[] = {
+        { 0xd9, 0xd0, 0 },           /* fnop */
+        { 0xd9, 0xe0, 0 },           /* fchs */
+        { 0xd9, 0xe1, 0 },           /* fabs */
+        { 0xd9, 0xe4, X_CC },        /* ftst */
+        { 0xd9, 0xe5, X_CC },        /* fxam */
+        { 0xd9, 0xe8, X_PUSH },      /* fld1 */
+        { 0xd9, 0xe9, X_PUSH | X_RC }, /* fldl2t */
+        { 0xd9, 0xea, X_PUSH | X_RC }, /* fldl2e */
+        { 0xd9, 0xeb, X_PUSH | X_RC }, /* fldpi */
+        { 0xd9, 0xec, X_PUSH | X_RC }, /* fldlg2 */
+        { 0xd9, 0xed, X_PUSH | X_RC }, /* fldln2 */
+        { 0xd9, 0xee, X_PUSH },      /* fldz */
+        { 0xd9, 0xf0, X_APPX },      /* f2xm1 */
+        { 0xd9, 0xf1, X_APPX },      /* fyl2x */
+        { 0xd9, 0xf2, X_APPX },      /* fptan */
+        { 0xd9, 0xf3, X_APPX },      /* fpatan */
+        { 0xd9, 0xf4, 0 },           /* fxtract */
+        { 0xd9, 0xf5, X_CC },        /* fprem1 */
+        { 0xd9, 0xf6, 0 },           /* fdecstp */
+        { 0xd9, 0xf7, 0 },           /* fincstp */
+        { 0xd9, 0xf8, X_CC },        /* fprem */
+        { 0xd9, 0xf9, X_APPX },      /* fyl2xp1 */
+        { 0xd9, 0xfa, X_RC },        /* fsqrt */
+        { 0xd9, 0xfb, X_APPX },      /* fsincos */
+        { 0xd9, 0xfc, X_RC },        /* frndint */
+        { 0xd9, 0xfd, X_RC },        /* fscale */
+        { 0xd9, 0xfe, X_APPX },      /* fsin */
+        { 0xd9, 0xff, X_APPX },      /* fcos */
+        { 0xde, 0xd9, X_CC },        /* fcompp */
+        { 0xda, 0xe9, X_CC },        /* fucompp */
+        { 0xdb, 0xe0, 0 },           /* feni (8087): a no-op since the 287 */
+        { 0xdb, 0xe1, 0 },           /* fdisi (8087) */
+        { 0xdb, 0xe2, 0 },           /* fnclex */
+        { 0xdb, 0xe3, 0 },           /* fninit, with the stack full */
+        { 0xdb, 0xe4, 0 },           /* fnsetpm (287): a no-op since the 387 */
+    };
+    /* Memory: reading [ebx+38h] or writing [ebx+40h]; ESC byte and /digit. */
+    static const struct {
+        uint8_t esc, digit, flags;
+    } memops[] = {
+        { 0xd9, 0, X_SRC | X_PUSH },         /* fld dword */
+        { 0xdd, 0, X_SRC | X_PUSH },         /* fld qword */
+        { 0xdb, 5, X_SRC | X_PUSH },         /* fld tword (two bytes past the buffer) */
+        { 0xdf, 0, X_SRC | X_INT | X_PUSH }, /* fild word */
+        { 0xdb, 0, X_SRC | X_INT | X_PUSH }, /* fild dword */
+        { 0xdf, 5, X_SRC | X_INT | X_PUSH }, /* fild qword */
+        { 0xd8, 0, X_SRC | X_RC },           /* fadd dword */
+        { 0xd8, 1, X_SRC | X_RC },           /* fmul dword */
+        { 0xd8, 2, X_SRC | X_CC },           /* fcom dword */
+        { 0xd8, 3, X_SRC | X_CC },           /* fcomp dword */
+        { 0xd8, 4, X_SRC | X_RC },           /* fsub dword */
+        { 0xd8, 5, X_SRC | X_RC },           /* fsubr dword */
+        { 0xd8, 6, X_SRC | X_RC },           /* fdiv dword */
+        { 0xd8, 7, X_SRC | X_RC },           /* fdivr dword */
+        { 0xdc, 0, X_SRC | X_RC },           /* fadd qword */
+        { 0xdc, 1, X_SRC | X_RC },           /* fmul qword */
+        { 0xdc, 2, X_SRC | X_CC },           /* fcom qword */
+        { 0xdc, 3, X_SRC | X_CC },           /* fcomp qword */
+        { 0xdc, 4, X_SRC | X_RC },           /* fsub qword */
+        { 0xdc, 5, X_SRC | X_RC },           /* fsubr qword */
+        { 0xdc, 6, X_SRC | X_RC },           /* fdiv qword */
+        { 0xdc, 7, X_SRC | X_RC },           /* fdivr qword */
+        { 0xda, 0, X_SRC | X_INT | X_RC },   /* fiadd dword */
+        { 0xda, 1, X_SRC | X_INT | X_RC },   /* fimul dword */
+        { 0xda, 2, X_SRC | X_INT | X_CC },   /* ficom dword */
+        { 0xda, 3, X_SRC | X_INT | X_CC },   /* ficomp dword */
+        { 0xda, 4, X_SRC | X_INT | X_RC },   /* fisub dword */
+        { 0xda, 5, X_SRC | X_INT | X_RC },   /* fisubr dword */
+        { 0xda, 6, X_SRC | X_INT | X_RC },   /* fidiv dword */
+        { 0xda, 7, X_SRC | X_INT | X_RC },   /* fidivr dword */
+        { 0xde, 0, X_SRC | X_INT | X_RC },   /* fiadd word */
+        { 0xde, 2, X_SRC | X_INT | X_CC },   /* ficom word */
+        { 0xde, 4, X_SRC | X_INT | X_RC },   /* fisub word */
+        { 0xde, 7, X_SRC | X_INT | X_RC },   /* fidivr word */
+        { 0xd9, 2, X_DST | X_RC },           /* fst dword */
+        { 0xd9, 3, X_DST | X_RC },           /* fstp dword */
+        { 0xdd, 2, X_DST | X_RC },           /* fst qword */
+        { 0xdd, 3, X_DST | X_RC },           /* fstp qword */
+        { 0xdb, 7, X_DST },                  /* fstp tword */
+        { 0xdf, 2, X_DST | X_RC },           /* fist word */
+        { 0xdf, 3, X_DST | X_RC },           /* fistp word */
+        { 0xdb, 2, X_DST | X_RC },           /* fist dword */
+        { 0xdb, 3, X_DST | X_RC },           /* fistp dword */
+        { 0xdf, 7, X_DST | X_RC },           /* fistp qword */
+        { 0xdf, 6, X_DST | X_RC },           /* fbstp */
+        { 0xd9, 7, X_DST },                  /* fnstcw */
+        { 0xdd, 7, X_DST },                  /* fnstsw */
+    };
+    const char    *name = "x87";
+    struct variant v    = { .group = name, .emit = emit_x87, .fix_input = fix_x87, .fx = FX_CUSTOM, .defmask = dm_x87 };
+    int            p6   = g_cpu.has_cpuid && (g_cpu.features & CPUID_CMOV);
+    unsigned       row  = 0;
+
+    if (!has_fpu()) {
+        group_skip(name, "no FPU");
+        return;
+    }
+    group_begin(name);
+
+    /* Loads and stores alone, 0-8 registers deep: every stack position
+       (TOP) in turn, the empty ones underflowing on the way out. */
+    for (int depth = 0; depth <= 8; depth++) {
+        v.target_len = 0;
+        v.arg        = depth;
+        v.arg2       = 0;
+        v.arg3       = row++;
+        v.fx_arg     = 0;
+        run_plain(&v, 3);
+    }
+    for (unsigned o = 0; o < sizeof(regops) / sizeof(regops[0]); o++) {
+        if ((regops[o].flags & X_P6) && !p6)
+            continue;
+        for (int i = 0; i < 8; i++) {
+            v.target[0]  = regops[o].esc;
+            v.target[1]  = regops[o].modrm | i;
+            v.target_len = 2;
+            v.arg2       = regops[o].flags;
+            v.arg        = (v.arg2 & X_PUSH) ? 7 : 8;
+            v.arg3       = row++;
+            v.fx_arg     = 0;
+            run_plain(&v, 2);
+        }
+    }
+    for (unsigned o = 0; o < sizeof(ops) / sizeof(ops[0]); o++) {
+        for (int rc = 0; rc < ((ops[o].flags & X_RC) ? 4 : 1); rc++) {
+            for (int full = 0; full < ((ops[o].flags & X_PUSH) ? 2 : 1); full++) {
+                v.target[0]  = ops[o].esc;
+                v.target[1]  = ops[o].op;
+                v.target_len = 2;
+                v.arg2       = ops[o].flags;
+                v.arg        = (v.arg2 & X_PUSH) && !full ? 7 : 8;
+                v.arg3       = row++;
+                v.fx_arg     = rc;
+                run_plain(&v, 3);
+            }
+        }
+    }
+    for (unsigned o = 0; o < sizeof(memops) / sizeof(memops[0]); o++) {
+        int src = memops[o].flags & X_SRC;
+        for (int rc = 0; rc < ((memops[o].flags & X_RC) ? 4 : 1); rc++) {
+            v.target[0]  = memops[o].esc;
+            v.target[1]  = 0x43 | memops[o].digit << 3; /* [ebx+disp8] */
+            v.target[2]  = src ? 0x38 : 0x40;
+            v.target_len = 3;
+            v.arg2       = memops[o].flags;
+            v.arg        = src ? 7 : 8;
+            v.arg3       = row++;
+            v.fx_arg     = rc;
+            run_plain(&v, (v.arg2 & X_INT) ? N_X87_INTS + 1 : 3);
+        }
+    }
+
+    /* The hot loop: every rounding mode, with nothing else on the stack
+       and with it full, with and without a block boundary in the body. */
+    v.emit       = emit_x87_loop;
+    v.fix_input  = fix_x87_loop;
+    v.defmask    = dm_x87_loop;
+    v.target_len = 0;
+    v.arg2       = 0;
+    for (int rc = 0; rc < 4; rc++)
+        for (int depth = 0; depth <= 6; depth += 6)
+            for (int b = 0; b < 2; b++) {
+                v.fx_arg = rc;
+                v.arg    = depth;
+                v.arg3   = b;
+                run_plain(&v, N_X87_INTS + 2);
+            }
+    group_end(name);
+}
+
 /* ---- MMX arithmetic, logic, compares, packs and unpacks --------------- */
 
 static void
@@ -342,6 +803,30 @@ group_mmx_x87(void)
         v.target_len = put_fenv(v.target, pre[i].len);
         v.arg2       = pre[i].tw_defined;
         run_plain(&v, 1);
+    }
+    /* The MMX registers are the x87 mantissas: stored and loaded through
+       the other side, [ebx] at the buffer. */
+    static const struct {
+        uint8_t len;
+        uint8_t b[30];
+    } alias[] = {
+        /* after MMX (TOP 0, all valid): fstp tword [ebx+10*i], i 0-5: MMi with exponent FFFFh */
+        { SEQ(0xdb, 0x3b, 0xdb, 0x7b, 0x0a, 0xdb, 0x7b, 0x14, 0xdb, 0x7b, 0x1e, 0xdb, 0x7b, 0x28, 0xdb, 0x7b, 0x32) },
+        /* after MMX: fstp qword [ebx+8*i], i 0-7: those values narrowed (NaNs, the indefinite) */
+        { SEQ(0xdd, 0x1b, 0xdd, 0x5b, 0x08, 0xdd, 0x5b, 0x10, 0xdd, 0x5b, 0x18, 0xdd, 0x5b, 0x20, 0xdd, 0x5b, 0x28,
+              0xdd, 0x5b, 0x30, 0xdd, 0x5b, 0x38) },
+        /* emms; fld tword [ebx+10*i], i 0-5; fld1; fldz: MM2-MM7 the raw mantissas, MM1 8000..., MM0 0 */
+        { SEQ(0x0f, 0x77, 0xdb, 0x2b, 0xdb, 0x6b, 0x0a, 0xdb, 0x6b, 0x14, 0xdb, 0x6b, 0x1e, 0xdb, 0x6b, 0x28, 0xdb,
+              0x6b, 0x32, 0xd9, 0xe8, 0xd9, 0xee) },
+        /* emms; fild qword [ebx+8*i], i 0-7: MMi the normalised integers, not the integers */
+        { SEQ(0x0f, 0x77, 0xdf, 0x2b, 0xdf, 0x6b, 0x08, 0xdf, 0x6b, 0x10, 0xdf, 0x6b, 0x18, 0xdf, 0x6b, 0x20, 0xdf,
+              0x6b, 0x28, 0xdf, 0x6b, 0x30, 0xdf, 0x6b, 0x38) },
+    };
+    struct variant va = { .group = name, .mmx = 1, .fix_input = fix_mem_ebx };
+    for (unsigned i = 0; i < sizeof(alias) / sizeof(alias[0]); i++) {
+        memcpy(va.target, alias[i].b, alias[i].len);
+        va.target_len = alias[i].len;
+        run_plain(&va, 3);
     }
     fx_save(name);
     group_end(name);
