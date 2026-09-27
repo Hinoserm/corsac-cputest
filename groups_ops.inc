@@ -274,6 +274,8 @@ fix_mul(const struct variant *v)
     }
 }
 
+static const char *expect_idiv(const struct variant *, const struct kin *, const struct kout *);
+
 static void
 group_muldiv(void)
 {
@@ -296,7 +298,11 @@ group_muldiv(void)
                 v.arg3      = size | ((op == 5 || op == 7) << 8);
                 v.defmask   = div ? dm_div : dm_mul;
                 v.faults_ok = div;
-                run_keep(&v, div ? 13 : 7);
+                v.expect = op == 7 && size >= 16 ? expect_idiv : 0;
+                if (v.expect && rm != RM_MEM)
+                    run_register_forms_a16_a32(&v, 13);
+                else
+                    run_keep(&v, div ? 13 : 7);
             }
         }
     }
@@ -891,6 +897,70 @@ expect_shd(const struct variant *v, const struct kin *in, const struct kout *o)
             return "double-shift register result or preserved registers";
     if (memcmp_(o->buf, expected.buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
         return "double-shift memory result or surrounding bytes";
+    return 0;
+}
+
+/* Intel IDIV: signed quotient truncated toward zero, signed remainder
+   matching the dividend, and #DE before result writes on zero/overflow.
+   Unsigned bit-by-bit magnitude division avoids a signed MIN/-1 trap in
+   the oracle itself and needs no compiler runtime division helper. */
+static const char *
+expect_idiv(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    unsigned size = v->arg3 & 255;
+    uint32_t mask = szmask(size), sign = 1u << (size - 1);
+    uint32_t divisor = kin_opnd(in, v->arg2, size);
+    unsigned negative_dividend = (in->edx & sign) != 0;
+    unsigned negative_divisor = (divisor & sign) != 0;
+    uint64_t dividend = ((uint64_t)(in->edx & mask) << size) | (in->eax & mask);
+    uint64_t dividend_mask = size == 32 ? ~(uint64_t)0 : 0xffffffffu;
+    if (negative_dividend)
+        dividend = (0 - dividend) & dividend_mask;
+    uint32_t magnitude = negative_divisor ? (0u - divisor) & mask : divisor;
+    uint64_t quotient = 0, remainder = 0;
+    if (magnitude) {
+        for (int bit = 2 * size - 1; bit >= 0; bit--) {
+            remainder = (remainder << 1) | ((dividend >> bit) & 1);
+            if (remainder >= magnitude) {
+                remainder -= magnitude;
+                quotient |= (uint64_t)1 << bit;
+            }
+        }
+    }
+    unsigned negative_quotient = negative_dividend ^ negative_divisor;
+    int fault = !magnitude || quotient > (negative_quotient ? sign : sign - 1);
+    struct kout expected;
+    memset(&expected, 0, sizeof(expected));
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP)
+            *kout_reg(&expected, r) = kin_reg(in, r);
+    uint32_t flags = in->flags & F_ARITH;
+    if (v->producer == 1)
+        flags = oracle_addsub_flags(in->ecx, in->edx, 32, 1);
+    else if (v->producer != 0)
+        return "IDIV predicate has an unsupported producer";
+    if (fault) {
+        if (o->fault != 0 || o->fault_err ||
+            o->fault_ip != (uint32_t)(g_target_start - g_cur_slot))
+            return "IDIV zero/overflow must raise #DE at the first prefix";
+        if ((o->flags & F_ARITH) != flags)
+            return "faulting IDIV changed arithmetic flags";
+    } else {
+        if (o->fault != 0xff)
+            return "in-range IDIV unexpectedly faulted";
+        uint32_t q = negative_quotient ? 0u - (uint32_t)quotient : (uint32_t)quotient;
+        uint32_t r = negative_dividend ? 0u - (uint32_t)remainder : (uint32_t)remainder;
+        expected.eax = (in->eax & ~mask) | (q & mask);
+        expected.edx = (in->edx & ~mask) | (r & mask);
+        /* All arithmetic flags are undefined on successful IDIV. */
+    }
+    if ((o->flags ^ in->flags) & 0x400)
+        return "IDIV changed DF";
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP && *kout_reg(&expected, r) != *kout_reg((struct kout *)o, r))
+            return "IDIV quotient/remainder or preserved register state";
+    if (memcmp_(o->buf, in->buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
+        return "IDIV changed its source or surrounding memory";
     return 0;
 }
 
