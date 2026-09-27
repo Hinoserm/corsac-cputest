@@ -83,7 +83,7 @@ on_fault(int sig, siginfo_t *si, void *ctx)
     ucontext_t *uc = ctx;
     greg_t     *g  = uc->uc_mcontext.gregs;
     (void) si;
-    g_fault.vec    = (sig == SIGILL) ? 6 : (sig == SIGFPE) ? 0 : 13;
+    g_fault.vec    = g[REG_TRAPNO]; /* preserve #DE versus x87 #MF */
     if (sig == SIGTRAP) {
         /* INT3, INT 3 and ICEBP: a trap, EIP already past the instruction. */
         const uint8_t *ip = (const uint8_t *) g[REG_EIP];

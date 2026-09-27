@@ -6,11 +6,10 @@
  * instruction that leaves the flags in a known lazy state, run the
  * instruction under test, and store the flags and registers to an output
  * record. Each generated copy goes to an address never used for code
- * before and is run four times with the same input. 86Box interprets a
- * block the first time it sees it, interprets it again while recompiling
- * it the second time, and runs the compiled code from the third time on,
- * so runs 1-2 and 3-4 are the interpreter and the recompiler on identical
- * input. Any difference between the four is a recompiler bug.
+ * before and is run four times with the same input. Engine selection is
+ * not observable here: compiled blocks may call interpreter helpers.
+ * Defined differences or independent expected-result failures stop; raw
+ * observations remain available without becoming architectural claims.
  *
  * Every result also goes into two CRCs per group, one over the interpreted
  * runs and one over the compiled runs, so different builds, an
@@ -21,6 +20,7 @@
  */
 
 #include "harness.h"
+#include "test_identity.h"
 
 /* ---- port I/O and the serial console ---------------------------------- */
 
@@ -653,9 +653,9 @@ struct variant {
     uint8_t       mmx;           /* MM0-MM7 loaded from g_mmx_in, stored to g_mmx_out */
     uint8_t       code16;        /* producer and target run in a 16-bit code segment */
     uint16_t      code16_ip;     /* ... starting at this IP (the segment based that much before the code) */
-    uint8_t       paging;        /* #PF: fault_err = error code | (CR2 - buffer) << 8 */
+    uint8_t       paging;        /* #PF: separate error code and normalized CR2 */
     uint8_t       ring;          /* 1-3: run at that CPL; 4: in V86 mode (see ring_env_on()) */
-    uint8_t       debug;         /* fault_err = DR6 after the run, fault or not */
+    uint8_t       debug;         /* separate DR6, fault error code unchanged */
     uint32_t      ring_flags;    /* EFLAGS bits the entry IRET adds: IOPL, AC */
     void        (*before_run)(const struct variant *v); /* before each of the four runs */
     void        (*after_run)(const struct variant *v);  /* after each, before the harness looks at memory */
@@ -666,10 +666,19 @@ struct variant {
     void        (*canon)(const struct variant *v, const struct kin *in, struct kout *o);
     void        (*emit)(struct emit *e, const struct variant *v); /* instead of target[] */
     defmask_fn    defmask;
+    uint8_t       fxsave; /* normalize reserved/feature-dependent save-area bytes */
+    const char *(*expect)(const struct variant *, const struct kin *, const struct kout *);
 };
 
+/* Forward declarations for focused, manual-derived predicates. */
+static void oracle_selfcheck(void);
+static void x87_arch_cases(const char *name);
+static void threednow_arch_cases(const char *name);
+static void emms_arch_cases(const char *name);
+
+
 struct group_stats {
-    uint32_t tests, mismatches, faults;
+    uint32_t tests, mismatches, faults, raw_differences;
     uint32_t crc_interp, crc_comp;
     uint32_t defined, crc_defined;
     uint32_t crc_raw; /* the same results unmasked: one CPU model against another */
@@ -741,6 +750,7 @@ defined_result(const struct variant *v, const struct kin *in, const struct kout 
 
     *d = *o;
     normalize(v, d);
+    d->sandbox_crc = d->arch_sandbox_crc;
     switch (v->fx) {
         case FX_NONE:
             break;
@@ -1133,8 +1143,27 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
     memcpy(o->buf, g_buf, BUF_SIZE);
     memcpy(o->lowbuf, LOWBUF, LOWBUF_SIZE);
     o->sandbox_crc = mem ? crc_add(0, SANDBOX, SANDBOX_SIZE) : 0;
-    if (v->mmx) /* the MMX registers count as memory */
-        o->sandbox_crc = crc_add(o->sandbox_crc, g_mmx_out, sizeof(g_mmx_out));
+    if (v->mmx)
+        memcpy(o->mmx, g_mmx_out, sizeof(o->mmx));
+    o->arch_sandbox_crc = o->sandbox_crc;
+    if (v->fxsave && mem) {
+        /* Intel FXSAVE layout: keep canaries outside the area, mask only
+           reserved fields, instruction pointers and uncontrolled XMM state.
+           Raw memory is untouched for diagnostics. */
+        uint32_t crc = 0;
+        for (unsigned i = 0; i < SANDBOX_SIZE; i++) {
+            uint8_t b = SANDBOX[i];
+            if (i >= 0x3000 && i < 0x3200) {
+                unsigned x = i - 0x3000;
+                if (x == 5 || (x >= 8 && x < 32) || x >= 160 ||
+                    (x >= 32 && ((x - 32) & 15) >= 10))
+                    b = 0;
+                if (x == 7) b &= 7; /* FOP has eleven bits */
+            }
+            crc = crc_add(crc, &b, 1);
+        }
+        o->arch_sandbox_crc = crc;
+    }
     if (vec != 0xff) {
         /* The registers at the fault, not the (unwritten) output record. */
         o->eax      = g_fault.eax;
@@ -1156,15 +1185,15 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
         if (v->debug) {
             uint32_t dr6;
             __asm__ volatile("mov %%dr6, %0" : "=r"(dr6));
-            o->fault_err = dr6;
+            o->fault_dr6 = dr6;
         }
         if (v->paging && vec == 14) {
             uint32_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
             /* CR2 relative to the buffer, or (bit 31) to the alias area at
                1 GB, so it doesn't move with the build */
-            o->fault_err = cr2 >= 0x40000000u ? 0x80000000u | (g_fault.err & 0xff) | ((cr2 - 0x40000000u) << 8)
-                                              : (g_fault.err & 0xff) | ((cr2 - (uint32_t) g_buf) << 8);
+            o->fault_cr2_space = cr2 >= 0x40000000u;
+            o->fault_cr2 = cr2 - (o->fault_cr2_space ? 0x40000000u : (uint32_t) g_buf);
         }
 #endif
     }
@@ -1337,7 +1366,7 @@ regs_line(const char *label, uint32_t fl, const uint32_t *r7)
 static void
 stop_mismatch(const struct variant *v, const struct kin *in, const struct kout out[RUNS])
 {
-    static const char *const labels[RUNS] = { "run 1 (interpreted)", "run 2 (interpreted, compiling)", "run 3 (compiled)", "run 4 (compiled again)" };
+    static const char *const labels[RUNS] = { "run 1 (first execution)", "run 2 (repeat)", "run 3 (repeat)", "run 4 (repeat)" };
     stop_banner("runs disagree");
     vga_quiet = 0;
     puts_("\n==== STOP: THE FOUR RUNS OF ONE TEST DISAGREE ====\n");
@@ -1363,6 +1392,9 @@ stop_mismatch(const struct variant *v, const struct kin *in, const struct kout o
         put_kv("fault", out[r].fault, 2);
         put_kv("fault_ip", out[r].fault_ip, 8);
         put_kv("fault_err", out[r].fault_err, 8);
+        put_kv("cr2_relative", out[r].fault_cr2, 8);
+        put_kv("cr2_space", out[r].fault_cr2_space, 1);
+        put_kv("dr6", out[r].fault_dr6, 8);
         put_kv("sandbox_crc", out[r].sandbox_crc, 8);
         putch('\n');
         hexdump("buffer", out[r].buf, BUF_SIZE, 0);
@@ -1615,10 +1647,8 @@ emit_ring(struct emit *e, const struct variant *v)
     }
 }
 
-/* A fingerprint of a group's definition: every variant's bytes and
-   settings, as the counting pass meets them. A stored reference is only
-   compared when its fingerprint matches, so changing a group can never
-   make an old reference stop the test. */
+/* Group fingerprint starts with the complete source/schema identity, then
+   includes variant bytes and settings from the counting pass. */
 static uint32_t g_defhash, g_group_def;
 
 static void
@@ -1626,7 +1656,7 @@ def_hash(const struct variant *v)
 {
     uint32_t f[16] = { v->target_len, v->producer, v->boundary, v->fx, v->fx_arg, v->arg, v->arg2, v->arg3,
                        v->flags_mask, v->stack | (v->mmx << 1) | (v->code16 << 2) | (v->paging << 3) | (v->faults_ok << 4) | (v->no_ref << 5) | (v->reg_fix << 6) | (v->debug << 7),
-                       v->ring | (v->code16_ip << 8), v->ring_flags, v->norm, v->emit != 0, v->defmask != 0, (v->fix_input != 0) | ((v->canon != 0) << 1) };
+                       v->ring | (v->code16_ip << 8), v->ring_flags, v->norm, v->emit != 0, v->defmask != 0, (v->fix_input != 0) | ((v->canon != 0) << 1) | ((v->expect != 0) << 2) | (v->fxsave << 3) };
     g_defhash = crc_add(g_defhash, v->target, v->target_len);
     g_defhash = crc_add(g_defhash, f, sizeof(f));
 }
@@ -1642,6 +1672,9 @@ run_variant(const struct variant *v)
 #ifdef RUN_ONLY
     if (g_only_skip)
         return;
+#endif
+#ifdef ORACLES_ONLY
+    if (!v->expect) return;
 #endif
     struct kout out[RUNS];
     struct kin  in;
@@ -1772,10 +1805,10 @@ run_variant(const struct variant *v)
         if (v->debug && vec == 0xff) {
             uint32_t dr6;
             __asm__ volatile("mov %%dr6, %0" : "=r"(dr6));
-            out[r].fault_err = dr6;
+            out[r].fault_dr6 = dr6;
         }
 #endif
-        if (v->canon && out[r].fault == 0xff)
+        if (v->canon && (out[r].fault == 0xff || (v->ring == 4 && out[r].fault == 0x30)))
             v->canon(v, &in, &out[r]);
         if (v->mmx)
             memcpy(g_mmx_runs[r], g_mmx_out, sizeof(g_mmx_out));
@@ -1786,10 +1819,30 @@ run_variant(const struct variant *v)
         status();
     if (out[0].fault != 0xff)
         g_stats.faults++;
-    int bad = 0;
-    for (int r = 1; r < RUNS; r++)
-        if (memcmp_(&out[r], &out[0], sizeof(struct kout)))
-            bad = 1;
+    int bad = 0, raw_bad = 0;
+    struct kout projected[RUNS];
+    int has_defined[RUNS];
+    for (int r = 0; r < RUNS; r++) {
+        if (v->expect) {
+            const char *why = v->expect(v, &in, &out[r]);
+            if (why) {
+                puts_("ORACLE FAIL: "); puts_(why); putch('\n');
+                bad = 1;
+            }
+        }
+        has_defined[r] = defined_result(v, &in, &out[r], &projected[r]);
+        if (r) {
+            raw_bad |= memcmp_(&out[r], &out[0], sizeof(struct kout)) != 0;
+            bad |= has_defined[r] != has_defined[0] ||
+                   (has_defined[r] && memcmp_(&projected[r], &projected[0], sizeof(struct kout)));
+        }
+    }
+    if (raw_bad && !bad) {
+        g_stats.raw_differences++;
+#ifdef STRICT_RAW
+        bad = 1;
+#endif
+    }
     if (bad) {
         g_stats.mismatches++;
         stop_mismatch(v, &in, out);
@@ -2032,11 +2085,11 @@ ref_check(const char *name, int skipped)
         vga_quiet = 0;
         return;
     }
-    if (skipped == r->skipped && (skipped || (r->tests == g_stats.tests && r->crc_raw == g_stats.crc_raw && r->crc_defined == g_stats.crc_defined))) {
+    if (skipped == r->skipped && (skipped || (r->tests == g_stats.tests && r->crc_defined == g_stats.crc_defined))) {
         vga_quiet = 1;
         puts_("REF ");
         puts_(name);
-        puts_(" matches\n");
+        puts_(r->crc_raw == g_stats.crc_raw ? " matches\n" : " defined results match; raw/model-specific observations differ\n");
         vga_quiet = 0;
         return;
     }
@@ -2114,7 +2167,7 @@ group_begin(const char *name)
         seed = (seed ^ (uint8_t) *p) * 0x01000193;
     rng_state = seed | 1;
     if (g_counting) {
-        g_defhash = 0;
+        g_defhash = crc_add(0, TEST_SOURCE_ID, sizeof(TEST_SOURCE_ID));
         return;
     }
     g_group_name = name;
@@ -2150,6 +2203,8 @@ group_end(const char *name)
     putdec(g_stats.defined);
     puts_(" crc_defined=");
     puthex(g_stats.crc_defined, 8);
+    puts_(" raw_differences=");
+    putdec(g_stats.raw_differences);
     puts_(" crc_raw=");
     puthex(g_stats.crc_raw, 8);
     puts_(" def=");
@@ -2176,6 +2231,7 @@ group_skip(const char *name, const char *why)
 }
 
 #include "groups.inc"
+#include "groups_oracles.inc"
 
 /* ---- entry --------------------------------------------------------------- */
 
@@ -2218,8 +2274,10 @@ cmain(uint32_t rom_base)
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
 #endif
 
-    puts_("\nCPUTEST 3 load=");
+    oracle_selfcheck();
+    puts_("\nCPUTEST 4 load=");
     puthex(rom_base, 5);
+    puts_(" source=" TEST_SOURCE_ID);
     puts_(" ram=");
     putdec(g_ram_top >> 20);
     puts_("M e820=");

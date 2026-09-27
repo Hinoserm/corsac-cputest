@@ -193,7 +193,7 @@ mm_lanes(void)
 static void
 loop_fill(const struct loop_def *d)
 {
-    uint32_t m = szmask(d->size);
+    uint32_t m = (d->size <= 32 ? szmask(d->size) : 0);
     for (int i = 0; i < LOOP_N; i++) {
         uint32_t a = rnd_operand(), b = rnd_operand(), c = rnd(), x = rnd_operand();
         switch (d->kind) {
@@ -410,11 +410,21 @@ emit_loop(struct emit *e, const struct variant *v)
     e32(e, (uint32_t) &g_lraw);
 }
 
+static int
+dm_sample_loop(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    dm_exhaust(v, in, d, undef);
+    /* Only the folded architectural aggregate is meaningful here. These
+       are the last iteration's scratch copies, including estimates. */
+    d->eax = d->ecx = d->edx = d->esi = 0;
+    return 1;
+}
+
 static void
 group_loop(unsigned i)
 {
     const struct loop_def *d = &loop_defs[i];
-    struct variant         v = { .group = d->name, .emit = emit_loop, .fx = FX_CUSTOM, .defmask = dm_exhaust, .arg2 = i };
+    struct variant         v = { .group = d->name, .emit = emit_loop, .fx = FX_CUSTOM, .defmask = dm_sample_loop, .arg2 = i };
     if (d->kind >= LK_MMX && !(g_cpu.features & CPUID_MMX)) {
         group_skip(d->name, "no MMX");
         return;

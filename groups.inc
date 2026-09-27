@@ -62,6 +62,9 @@ fix_mem16(const struct variant *v)
 static int
 dm_fxarg(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
 {
+    /* Custom system sequences commonly end in AND/OR/TEST. Their AF is
+       not portable; dedicated scalar groups independently check AF. */
+    *undef |= F_AF;
     return v->fx_arg;
 }
 

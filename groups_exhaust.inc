@@ -149,6 +149,7 @@ static int
 dm_exhaust(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
 {
     d->edi = 0;
+    d->ebx = 0; /* final raw flags/result scratch; EBP is the defined aggregate */
     return 1;
 }
 

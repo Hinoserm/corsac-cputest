@@ -1,5 +1,40 @@
 # corsac-cputest
 
+## Version 4: architectural checks and raw observations
+
+Version 4 separates documented results from undefined or model-dependent
+observations. Defined differences and explicit oracle failures stop the run.
+Raw-only differences are counted and retained in the raw CRC; use
+`--strict-raw` to stop on those too. A raw difference alone does not establish
+an emulator accuracy bug.
+
+The x87 group now has independent predicates for FDIV exception classes,
+masked/unmasked empty stores, destination suppression, delayed #MF at FWAIT,
+and completed FPREM/FPREM1 results. The MMX group checks EMMS tags/TOP.
+3DNow predicates check signed zero and PFRSQRT bounds/sign/zero behavior.
+These predicates are checked even when all four executions agree. Built-in
+mutation checks verify that known wrong answers are rejected.
+
+`python3 build.py --only x87,mmx.x87,3dnow --oracles-only` builds a focused
+diagnostic image. Do not commit that filtered image; the checked-in image
+must be built without filters. `--host` runs applicable predicates directly
+on the Linux CPU, providing an independent reference for portable cases.
+
+The banner includes a SHA-256 source identity covering emitters, input
+generators, masks, capture, cleanup, and build sources. It contributes to
+every group fingerprint, invalidating old references when shared logic
+changes. Version 3 references are not compatible. A group fingerprint does
+not include `refs.inc` itself.
+
+Repeated execution does not prove which engine ran an instruction. The
+report now labels first/repeated executions; use the external runner
+`--interp` and its dynarec-enabled configuration for separate engine runs.
+Instructions can still fall back within compiled blocks.
+
+The remainder of this document describes group coverage. Historical engine
+and reference assumptions below are superseded by these version 4 rules.
+
+
 A bare-metal x86 CPU accuracy test. I use it to check 86Box's recompiler
 against its interpreter, and both against real CPUs, from the 486 up.
 
@@ -50,13 +85,12 @@ Every test is a few bytes of code generated at run time:
 3. run the instruction under test;
 4. store EFLAGS and the registers.
 
-Each copy is placed at an address never used for code before, and run four
-times on the same input. 86Box interprets a new block on its first run,
-interprets it again while compiling it on the second, and runs the compiled
-code from the third on. So runs 1-2 are the interpreter and runs 3-4 are the
-recompiler. Any difference between them stops the test, with everything
-needed to see why (see below). On real hardware all four runs must be the
-same too.
+Each copy is placed at an address never used for code before and executed
+four times. On 86Box this often exercises first-execution, compilation and
+compiled paths, but those paths are not observable by the guest and fallback
+is possible. Defined-result differences stop the test. Raw observations are
+reported separately; explicit expected predicates can reject four identical
+wrong results.
 
 Memory operands point into a 16 KB sandbox that is refilled before every run
 and CRC'd after it, so a wrong address shows up as a wrong result instead of
@@ -64,8 +98,8 @@ landing in the harness.
 
 ## Groups
 
-A group's CRCs stay comparable between versions until the group itself
-changes (its `def=` fingerprint says when). A new test for an instruction
+A group's CRCs are comparable only when its complete source/definition
+fingerprint matches (the `def=` field). A new test for an instruction
 goes into the group that already covers it, not into a group of its own.
 
 | # | group          | what                                                            |
@@ -236,8 +270,8 @@ it takes.
   instructions that read the flags** (SETcc, CMOVcc, ADC/SBB, RCL/RCR,
   PUSHF, the BCD adjusts, SALC, CMC, LAHF, INTO). The rest run once plain
   and once after an ADD across a block boundary.
-- **Four runs** per test: two interpreted, two compiled. The second
-  compiled run is where anything the first one left behind shows up.
+- **Four runs** per test at the same address. Repeat execution also catches
+  state left behind by an earlier run; engine selection requires external checks.
 
 ## When something doesn't match
 
@@ -260,7 +294,7 @@ them. An outcome outside the list still stops the test.
 The same happens when a group's results differ from what a real CPU of
 the same model gave. `refs.inc` holds those results, one line per group,
 made by `refs.py` from the real CPU's serial log. Each group line carries
-`def=`, a fingerprint of the group's own definition; a reference is only
+`def=`, a fingerprint including the complete test source identity; a reference is only
 compared while that fingerprint matches, so changing a group makes its old
 reference stale (it says so and goes on), never wrong.
 
@@ -283,8 +317,10 @@ DONE   pass=N tests= mismatches= arena_wraps= PASS|FAIL
   results. Compare this one between different CPU models, emulated or real.
   In `exhaust8` the loop folds only the defined flags into EBP, which goes
   into this CRC.
-  With paging on, a #PF's `fault_err` is the error code plus CR2 (relative
-  to the buffer) shifted left 8.
+  Page-fault error codes, normalized CR2 plus address-space discriminator,
+  and DR6 now occupy separate fields, without truncating CR2. MMX payload
+  and architectural sandbox CRC are also separate so undefined payload or
+  reserved FXSAVE bytes can be excluded without hiding other memory writes.
   A ring or V86 test ends with INT 30h, so its normal result has fault
   vector 30h; any other vector is a fault on the way.
 - `crc_raw`: the same results with nothing masked (in `exhaust8`, EDI's
@@ -297,8 +333,8 @@ on which groups ran before it.
 
 ## Reference values
 
-Every CRC changed in CPUTEST 3 (see *How much it runs*). References for it
-will come from real CPUs; the values for CPUTEST 1 and 2 no longer apply.
+Every CRC changed in CPUTEST 4 (see *How much it runs*). References must come from independently identified hardware; earlier
+versions are incompatible. Do not import an emulator log as a hardware reference.
 
 Three interpreter bugs in 86Box turned up this way, all in upstream master:
 

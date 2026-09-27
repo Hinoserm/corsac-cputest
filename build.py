@@ -3,6 +3,8 @@
 boot from a hard disk or a CF card."""
 
 import os
+import hashlib
+from pathlib import Path
 import subprocess
 import sys
 
@@ -50,21 +52,26 @@ MUSL_GCC = os.path.expanduser(
 def build_host():
     """The harness as a static i386 ELF: runs on this Linux host and on
     CORSAC alike, and on anything back to a 486 (no CMOV)."""
-    extra = dump_flags() + only_flags()
+    extra = dump_flags() + only_flags() + (["-DSTRICT_RAW"] if "--strict-raw" in sys.argv else []) + (["-DORACLES_ONLY"] if "--oracles-only" in sys.argv else [])
     out = "cputest-dump" if extra else "cputest"
     run([MUSL_GCC, "-static", "-no-pie", "-fno-pie", "-march=i486", "-mtune=i486", "-O2", "-std=gnu11", "-DHOSTTEST"] + extra + [
          "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-unused-function", "-Wno-missing-field-initializers",
-         "-I", HERE, "-o", out, os.path.join(HERE, "harness.c")])
+         "-I", OUT, "-I", HERE, "-o", out, os.path.join(HERE, "harness.c")])
 
 
 def main():
     os.makedirs(OUT, exist_ok=True)
+    digest = hashlib.sha256(b"cputest-result-schema-4\0")
+    for p in sorted(Path(HERE).iterdir()):
+        if p.name != "refs.inc" and p.suffix in (".c", ".h", ".inc", ".asm", ".ld", ".py"):
+            digest.update(p.name.encode() + b"\0" + p.read_bytes())
+    Path(OUT, "test_identity.h").write_text('#define TEST_SOURCE_ID "' + digest.hexdigest() + '"\n')
     if "--host" in sys.argv:
         build_host()
         return
     run(["nasm", "-f", "elf32", "-o", "rt.o", os.path.join(HERE, "rt.asm")])
-    extra = dump_flags() + only_flags()
-    run(["gcc"] + CFLAGS + extra + ["-I", HERE, "-c", "-o", "harness.o", os.path.join(HERE, "harness.c")])
+    extra = dump_flags() + only_flags() + (["-DSTRICT_RAW"] if "--strict-raw" in sys.argv else []) + (["-DORACLES_ONLY"] if "--oracles-only" in sys.argv else [])
+    run(["gcc"] + CFLAGS + extra + ["-I", OUT, "-I", HERE, "-c", "-o", "harness.o", os.path.join(HERE, "harness.c")])
     run(["ld", "-m", "elf_i386", "-T", os.path.join(HERE, "payload.ld"), "-o", "payload.elf", "rt.o", "harness.o"])
     run(["objcopy", "-O", "binary", "payload.elf", "payload.bin"])
 

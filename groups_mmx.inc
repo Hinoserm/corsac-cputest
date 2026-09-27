@@ -242,17 +242,22 @@ emit_x87(struct emit *e, const struct variant *v)
     e8(e, 0xe0);
 }
 
-/* C0, C2 and C3 are undefined after most instructions; C1 is not. The
-   transcendentals round differently from model to model. */
+/* Target and cleanup status have different defined bits (Intel Vol. 2).
+   Transcendentals and partial remainders are model-specific observations. */
 static int
 dm_x87(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
 {
     if (v->arg2 & X_APPX)
         return 0;
-    if (!(v->arg2 & X_CC)) {
-        d->edi &= ~0x4500u;
-        d->eax &= ~0x4500u;
-    }
+    /* Cleanup FSTPs have undefined C0/C2/C3, independently of target. */
+    d->eax &= ~0x4500u;
+    if (!(v->arg2 & X_CC)) d->edi &= ~0x4500u;
+    if ((v->target[0] == 0xdd && (v->target[1] & 0xf8) == 0xc0) || /* FFREE */
+        (v->target[0] == 0xd9 && (v->target[1] == 0xd0 || /* FNOP */
+         (v->target[1] < 0xc0 && ((v->target[1] & 0x38) == 0x38))))) /* FNSTCW */
+        d->edi &= ~0x4700u;
+    if (v->target[0] == 0xd9 && (v->target[1] == 0xf8 || v->target[1] == 0xf5) &&
+        (d->edi & 0x400)) return 0; /* implementation-dependent partial FPREM */
     return 1;
 }
 
@@ -506,6 +511,7 @@ group_x87(void)
         return;
     }
     group_begin(name);
+    x87_arch_cases(name);
 
     /* Loads and stores alone, 0-8 registers deep: every stack position
        (TOP) in turn, the empty ones underflowing on the way out. */
@@ -725,7 +731,7 @@ fx_save(const char *name)
 {
     uint32_t       a = (uint32_t) SANDBOX + 0x3000;
     struct variant v = { .group = name, .mmx = 1, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_fxarg,
-                         .fx_arg = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
+                         .fx_arg = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF, .fxsave = 1 };
     if (!(g_cpu.features & CPUID_FXSR))
         return;
     for (int k = 0; k < 5; k++) {
@@ -798,6 +804,7 @@ group_mmx_x87(void)
         return;
     }
     group_begin(name);
+    emms_arch_cases(name);
     for (unsigned i = 0; i < sizeof(pre) / sizeof(pre[0]); i++) {
         memcpy(v.target, pre[i].b, pre[i].len);
         v.target_len = put_fenv(v.target, pre[i].len);
@@ -867,6 +874,10 @@ fix_float(const struct variant *v)
 static int
 dm_3dnow(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
 {
+    if (v->target[0] == 0x0f && v->target[1] == 0x0e) {
+        memset(d->mmx, 0, sizeof(d->mmx)); /* AMD FEMMS leaves payload undefined */
+        d->edi &= ~0x4700u;
+    }
     return v->arg3;
 }
 
@@ -910,6 +921,7 @@ group_3dnow(void)
         return;
     }
     group_begin(name);
+    threednow_arch_cases(name);
     for (unsigned o = 0; o < sizeof(ops) / sizeof(ops[0]); o++) {
         if (ops[o].ext && !(g_cpu.ext_features & EXT_3DNOWEXT))
             continue;

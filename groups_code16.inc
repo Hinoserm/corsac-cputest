@@ -57,7 +57,8 @@ code16_opsize(const char *name)
         v.arg2       = seqs[i].fix == 2;
         v.reg_fix    = 1;
         v.fx_arg     = i != 7; /* PUSHFD holds the producer's undefined flags */
-        run_plain(&v, 2);
+        if (seqs[i].fix) run_keep(&v, 2);
+        else run_plain(&v, 2);
     }
 }
 

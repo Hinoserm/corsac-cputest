@@ -37,6 +37,9 @@ struct kout {
     uint32_t sandbox_crc; /* all of the sandbox, to catch writes outside buf */
     uint8_t  buf[BUF_SIZE];
     uint8_t  lowbuf[LOWBUF_SIZE];
+    uint32_t mmx[16]; /* kept separate: FEMMS makes these undefined */
+    uint32_t arch_sandbox_crc; /* documented save-area bytes only */
+    uint32_t fault_cr2, fault_cr2_space, fault_dr6;
 };
 
 /* Filled by isr_common (rt.asm); the offsets there must match. */

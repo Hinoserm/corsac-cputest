@@ -584,6 +584,7 @@ prefixes_segovr(const char *name)
     for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
         memcpy(v.target, seqs[i].b, seqs[i].len);
         v.target_len = seqs[i].len;
+        v.fx = i >= 8 ? FX_UNDEF : FX_NONE;
         run_plain(&v, 1);
     }
 }
@@ -617,6 +618,7 @@ group_prefixes(void)
     for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
         memcpy(v.target, seqs[i].b, seqs[i].len);
         v.target_len = seqs[i].len;
+        v.fx = (i == 6 || i == 7) ? FX_NONE : FX_UNDEF;
         v.fix_input  = seqs[i].mem ? fix_mem_ebx : 0;
         /* The branch hints read ZF: every producer. */
         if (seqs[i].b[1] == 0x74 || seqs[i].b[1] == 0x75) {

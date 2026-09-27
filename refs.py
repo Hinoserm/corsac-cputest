@@ -31,7 +31,7 @@ def parse(path):
         if g:
             out[g.group(1)] = (1, 0, 0, 0, 0)
             continue
-        g = re.match(r"GROUP (\S+) tests=(\d+) mismatches=(\d+) .*crc_defined=([0-9a-f]+) crc_raw=([0-9a-f]+) def=([0-9a-f]+)", l)
+        g = re.match(r"GROUP (\S+) tests=(\d+) mismatches=(\d+) .*crc_defined=([0-9a-f]+).* crc_raw=([0-9a-f]+) def=([0-9a-f]+)", l)
         if g and g.group(3) == "0":
             out[g.group(1)] = (0, int(g.group(2)), int(g.group(6), 16), int(g.group(4), 16), int(g.group(5), 16))
         elif l.startswith("GROUP ") and "def=" not in l and "skipped" not in l:

@@ -187,6 +187,9 @@ group_ldt_gate(void)
 
 /* Where the second task starts, set when its code is emitted. */
 static uint32_t g_task_eip;
+#ifndef HOSTTEST
+static uint32_t g_task_cr0;
+#endif
 
 /* Before each run: the second task's TSS as it starts (known registers,
    its entry point, its own stack), both TSS descriptors in the state the
@@ -198,6 +201,7 @@ task_before(const struct variant *v)
     ring_setup(v);
 #ifndef HOSTTEST
     uint32_t cr3;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(g_task_cr0));
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     memset(g_tss2, 0, sizeof(g_tss2));
     static const uint32_t regs[8] = { 0x11111111, 0x22222222, 0x33333333, 0x44444444, 0, 0x55555555, 0x66666666, 0x77777777 };
@@ -233,6 +237,7 @@ task_after(const struct variant *v)
         g_gdt2[(SEL_TSS2 >> 3) * 2 + 1] &= ~0x200u;
         __asm__ volatile("ltr %w0" : : "r"(SEL_TSS));
     }
+    __asm__ volatile("mov %0, %%cr0" : : "r"(g_task_cr0) : "memory");
 #endif
 }
 
