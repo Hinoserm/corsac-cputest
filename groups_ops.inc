@@ -739,11 +739,98 @@ expect_cx(const struct variant *v, const struct kin *in, const struct kout *o)
     return 0;
 }
 
+/* Intel 243191-002 BT/BTC/BTR/BTS: memory register indexes are signed;
+   register destinations and immediate indexes are modulo operand size.
+   Derive a single byte/bit location rather than repeating the emulator's
+   word/dword address adjustment. Only CF and unchanged DF are asserted. */
+static const char *
+expect_bt(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    struct kout expected;
+    memset(&expected, 0, sizeof(expected));
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP)
+            *kout_reg(&expected, r) = kin_reg(in, r);
+    memcpy(expected.buf, in->buf, BUF_SIZE);
+    memcpy(expected.lowbuf, in->lowbuf, LOWBUF_SIZE);
+    if (v->producer == 3)
+        expected.ecx = in->ecx + in->edx;
+    else if (v->producer != 0 && v->producer != 1)
+        return "bit-test predicate has an unsupported producer";
+    unsigned n = 0, size = 32, a16 = v->target[0] == 0x67;
+    if (a16) n++;
+    if (v->target[n] == 0x66) { size = 16; n++; }
+    if (v->target[n++] != 0x0f)
+        return "bit-test predicate has an unknown prefix";
+    unsigned op = v->target[n++], modrm = v->target[n++];
+    unsigned src = (modrm >> 3) & 7, dst = modrm & 7;
+    if (op == 0xba && src < 4) {
+        uint32_t flags = in->flags & F_ARITH;
+        if (v->producer == 1)
+            flags = oracle_addsub_flags(in->ecx, in->edx, 32, 1);
+        if (v->producer == 3)
+            flags = oracle_addsub_flags(in->ecx, in->edx, 32, 0);
+        if (o->fault != 6 || o->fault_err ||
+            o->fault_ip != (uint32_t)(g_target_start - g_cur_slot))
+            return "reserved 0F BA extension must raise #UD at its first prefix";
+        for (unsigned r = 0; r < 8; r++)
+            if (r != R_ESP && *kout_reg(&expected, r) != *kout_reg((struct kout *)o, r))
+                return "reserved 0F BA extension changed a register";
+        if ((o->flags & F_ARITH) != flags || ((o->flags ^ in->flags) & 0x400) ||
+            memcmp_(o->buf, in->buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
+            return "reserved 0F BA extension changed flags or memory";
+        return 0;
+    }
+    if (o->fault != 0xff)
+        return "valid bit-test instruction unexpectedly faulted";
+    int memory = (modrm & 0xc0) != 0xc0;
+    if (memory && (modrm & 0xc7) != (a16 ? 6 : 3))
+        return "bit-test predicate has an unknown addressing form";
+    if (memory && a16) n += 2; /* direct disp16 */
+    unsigned action = op == 0xba ? src - 4 : (op - 0xa3) / 8;
+    if (action > 3)
+        return "bit-test predicate has an unknown operation";
+    uint32_t offset = op == 0xba ? v->target[n] : *kout_reg(&expected, src);
+    uint32_t old_bit;
+    if (memory) {
+        int32_t index = op == 0xba ? (int32_t)(offset & (size - 1)) :
+            size == 16 ? (int32_t)(int16_t)offset : (int32_t)offset;
+        /* Floor division, including negative indexes: -1 is byte -1,
+           bit 7. C division truncates toward zero, so adjust its remainder. */
+        int32_t byte = index / 8, bit = index % 8;
+        if (bit < 0) { byte--; bit += 8; }
+        int32_t pos = (a16 ? 8 : (int32_t)(expected.ebx - (uint32_t)g_buf)) + byte;
+        if (pos < 0 || pos >= (a16 ? LOWBUF_SIZE : BUF_SIZE))
+            return "bit-test input lies outside captured memory";
+        uint8_t *data = a16 ? expected.lowbuf : expected.buf;
+        uint8_t mask = 1u << bit;
+        old_bit = (data[pos] & mask) != 0;
+        if (action == 1) data[pos] |= mask;
+        if (action == 2) data[pos] &= ~mask;
+        if (action == 3) data[pos] ^= mask;
+    } else {
+        uint32_t mask = 1u << (offset & (size - 1));
+        uint32_t *value = kout_reg(&expected, dst);
+        old_bit = (*value & mask) != 0;
+        if (action == 1) *value |= mask;
+        if (action == 2) *value &= ~mask;
+        if (action == 3) *value ^= mask;
+    }
+    if ((o->flags & F_CF) != old_bit || ((o->flags ^ in->flags) & 0x400))
+        return "bit-test carry or preserved direction flag";
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP && *kout_reg(&expected, r) != *kout_reg((struct kout *)o, r))
+            return "bit-test register result or preserved registers";
+    if (memcmp_(o->buf, expected.buf, BUF_SIZE) || memcmp_(o->lowbuf, expected.lowbuf, LOWBUF_SIZE))
+        return "bit-test memory result or surrounding bytes";
+    return 0;
+}
+
 /* Both address-size decoder paths contain the register writeback fix.
    67h changes the decoder path, but a ModR/M register operand is still
    the same register (Intel 243191-002 instruction encoding tables). */
 static void
-run_cx_register_forms(struct variant *v, int inputs)
+run_register_forms_a16_a32(struct variant *v, int inputs)
 {
     run_keep(v, inputs);
     for (unsigned i = v->target_len; i; i--)
@@ -790,7 +877,7 @@ group_cmpxchg(void)
                 if (rm == RM_MEM)
                     run_keep(&v, 3);
                 else
-                    run_cx_register_forms(&v, 3);
+                    run_register_forms_a16_a32(&v, 3);
             }
             /* Direct disp16 reaches the low buffer without consuming a
                data register as an address. Both a16 memory handlers and
@@ -851,7 +938,7 @@ group_cmpxchg(void)
             v.norm       = 1 << R_ESI;
             v.faults_ok  = f >= 2; /* register form and non-/1 encodings are #UD */
             if (f == 2)
-                run_cx_register_forms(&v, 3);
+                run_register_forms_a16_a32(&v, 3);
             else
                 run_keep(&v, 3);
         }
@@ -895,7 +982,7 @@ group_cmpxchg(void)
         x.target[1]  = 0xc0;
         x.target[2]  = m;
         x.target_len = 3;
-        run_cx_register_forms(&x, 1);
+        run_register_forms_a16_a32(&x, 1);
     }
     group_end(name);
 }

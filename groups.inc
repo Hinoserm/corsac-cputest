@@ -368,7 +368,16 @@ fix_bt_mem_reg(const struct variant *v)
     static const int16_t edges[] = { 0, 1, 7, 8, 15, 16, 31, 32, -1, -8, -9, -16, -17, -32, -33, 255, -256 };
     int                  e       = edge(sizeof(edges) / sizeof(edges[0]));
     int32_t              off     = e >= 0 ? edges[e] : (int32_t) (rnd() % 512) - 256;
-    g_in.ebx                     = (uint32_t) g_buf + 32;
+    if (v->arg3) {
+#ifdef HOSTTEST
+        g_skip = 1;
+#endif
+        /* The direct a16 operand starts at LOWBUF+8; keep its bit string
+           inside the captured sixteen bytes. Retain negative boundaries. */
+        if (off < -64) off = -64;
+        if (off > 63) off = 63;
+    } else
+        g_in.ebx = (uint32_t) g_buf + 32;
     if (v->arg)
         g_in.edx = (rnd() & 0xffff0000) | (uint16_t) (int16_t) off;
     else
@@ -377,6 +386,9 @@ fix_bt_mem_reg(const struct variant *v)
 
 /* BT, BTS, BTR, BTC: register destinations with a register or immediate
    bit offset, and memory destinations with either. */
+static const char *expect_bt(const struct variant *, const struct kin *, const struct kout *);
+static void run_register_forms_a16_a32(struct variant *, int);
+
 static void
 group_bt(void)
 {
@@ -384,7 +396,7 @@ group_bt(void)
     static const uint8_t imms[11]     = { 0, 1, 7, 8, 15, 16, 31, 32, 33, 63, 255 };
     static const uint8_t rr_pairs[3][2] = { { R_ECX, R_EAX }, { R_EDX, R_EDX }, { R_EBP, R_ESI } }; /* offset, destination */
     const char          *name         = "bt";
-    struct variant       v            = { .group = name, .fx = FX_BT };
+    struct variant       v            = { .group = name, .fx = FX_BT, .expect = expect_bt };
     group_begin(name);
 
     for (int o = 0; o < 4; o++) {
@@ -404,7 +416,7 @@ group_bt(void)
                 v.arg         = size;
                 v.arg2        = rr_pairs[p][0];
                 v.norm        = 0;
-                run_keep(&v, 12);
+                run_register_forms_a16_a32(&v, 12);
             }
             /* bt r, imm8 */
             for (int dst = 0; dst < 8; dst += 7) { /* EAX, EDI */
@@ -448,7 +460,43 @@ group_bt(void)
                 v.fix_input   = fix_bt_mem_reg;
                 v.arg         = size16;
                 run_keep(&v, 19);
+                n = 0;
+                v.target[n++] = 0x67;
+                if (size16)
+                    v.target[n++] = 0x66;
+                v.target[n++] = 0x0f;
+                v.target[n++] = rr_ops[o];
+                v.target[n++] = 0x06 | (R_EDX << 3); /* direct disp16 */
+                v.target[n++] = (uint32_t)LOWBUF + 8;
+                v.target[n++] = ((uint32_t)LOWBUF + 8) >> 8;
+                v.target_len = n;
+                v.arg3 = 1;
+                run_keep(&v, 19);
+                v.arg3 = 0;
             }
+        }
+    }
+    /* 0F BA /0-/3 are reserved. They must not reach any bit operation. */
+    for (unsigned size16 = 0; size16 < 2; size16++) {
+        for (unsigned ext = 0; ext < 4; ext++) {
+            int n = 0;
+            if (size16)
+                v.target[n++] = 0x66;
+            v.target[n++] = 0x0f;
+            v.target[n++] = 0xba;
+            v.target[n++] = MODRM_RR(ext, R_EAX);
+            v.target[n++] = 0xff;
+            v.target_len = n;
+            v.fix_input = 0;
+            v.reg_fix = 1;
+            v.norm = 0;
+            v.faults_ok = 1;
+            run_register_forms_a16_a32(&v, 1);
+            v.target[n - 2] = 0x03 | (ext << 3); /* [ebx] */
+            v.fix_input = fix_mem_ebx;
+            v.reg_fix = 0;
+            v.arg = 16;
+            run_keep(&v, 1);
         }
     }
     group_end(name);

@@ -751,7 +751,7 @@ kin_reg8(const struct kin *in, int r)
 static void
 normalize(const struct variant *v, struct kout *d)
 {
-    if (v->fix_input == fix_mem_ebx || v->fix_input == fix_bt_mem_reg)
+    if (v->fix_input == fix_mem_ebx || (v->fix_input == fix_bt_mem_reg && !v->arg3))
         d->ebx -= (uint32_t) g_buf;
     for (int r = 0; r < 8; r++)
         if ((v->norm & (1 << r)) && r != R_ESP)
