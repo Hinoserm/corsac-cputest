@@ -599,6 +599,72 @@ oracle_addsub_flags(uint32_t a, uint32_t b, int size, int sub)
         | (((sub ? a ^ b : ~(a ^ b)) & (a ^ r) & sign) ? F_OF : 0);
 }
 
+/* ADC's AF is a carry out of bit 3, independent of the upper source
+   bits (Intel 243190-002 3.6.3.1; 243191-002 ADC, 3-21). These cases
+   target the three changed FLAGS_ADC8/16/32 AF calculations. */
+static void
+fix_adc_af(const struct variant *v)
+{
+    static const uint32_t upper[] = { 0, 0x70, 0xf0, 0x7ffffff0, 0xfffffff0 };
+    uint32_t mask = szmask(v->arg);
+    set_opnd(R_EAX, v->arg, (upper[v->arg2] & mask) | (g_case & 15));
+    set_opnd(R_ECX, v->arg, (upper[v->arg2] & mask) | 15);
+    g_in.flags = (g_in.flags & ~F_CF) | v->arg3;
+}
+
+static const char *
+expect_adc_af(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    uint32_t mask = szmask(v->arg), sign = 1u << (v->arg - 1);
+    uint32_t a = in->eax & mask, b = in->ecx & mask, carry = in->flags & F_CF;
+    uint64_t sum = (uint64_t)a + b + carry;
+    uint32_t result = (uint32_t)sum & mask;
+    unsigned parity = 0;
+    for (unsigned bit = 0; bit < 8; bit++)
+        parity ^= (result >> bit) & 1;
+    /* Direct nibble addition is deliberately independent of the
+       emulator's result-versus-first-operand shortcut. */
+    uint32_t flags = (sum > mask ? F_CF : 0) |
+        ((a & 15) + (b & 15) + carry > 15 ? F_AF : 0) |
+        (!parity ? F_PF : 0) | (!result ? F_ZF : 0) |
+        (result & sign ? F_SF : 0) |
+        ((~(a ^ b) & (a ^ result) & sign) ? F_OF : 0);
+    if (o->fault != 0xff)
+        return "ADC register instruction unexpectedly faulted";
+    if (o->eax != ((in->eax & ~mask) | result) || o->ecx != in->ecx ||
+        o->edx != in->edx || o->ebx != in->ebx || o->ebp != in->ebp ||
+        o->esi != in->esi || o->edi != in->edi)
+        return "ADC register result or preserved registers";
+    if ((o->flags & F_ARITH) != flags || ((o->flags ^ in->flags) & 0x400))
+        return "ADC flags disagree with independent carry arithmetic";
+    if (memcmp_(o->buf, in->buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
+        return "ADC register instruction changed memory";
+    return 0;
+}
+
+static void
+adc_af_cases(const char *name)
+{
+    struct variant v = { .group = name, .fx = FX_ALU, .fx_arg = 2,
+        .fix_input = fix_adc_af, .reg_fix = 1, .expect = expect_adc_af };
+    for (unsigned size = 8; size <= 32; size *= 2) {
+        v.arg = size;
+        int n = put_op(v.target, 0, size, 0x10);
+        v.target[n++] = MODRM_RR(R_ECX, R_EAX); /* ADC AL/AX/EAX, CL/CX/ECX */
+        v.target_len = n;
+        for (unsigned upper = 0; upper < 5; upper++) {
+            v.arg2 = upper;
+            for (unsigned carry = 0; carry < 2; carry++) {
+                v.arg3 = carry;
+                for (unsigned boundary = 0; boundary < 2; boundary++) {
+                    v.boundary = boundary;
+                    run_inputs(&v, 16);
+                }
+            }
+        }
+    }
+}
+
 static const char *
 expect_cx(const struct variant *v, const struct kin *in, const struct kout *o)
 {

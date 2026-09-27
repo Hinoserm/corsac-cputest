@@ -181,6 +181,8 @@ static const uint8_t pairs8[4][2]  = { { 0, 1 }, { 4, 7 }, { 2, 2 }, { 5, 3 } };
 /* ALU r/m,r and r,r/m, register forms, 8/16/32-bit. The flag math itself
    is covered exhaustively in exhaust8; this covers the encodings and
    registers. ADC and SBB read CF: every producer, on two pairs. */
+static void adc_af_cases(const char *name);
+
 static void
 group_alu(void)
 {
@@ -208,6 +210,7 @@ group_alu(void)
             }
         }
     }
+    adc_af_cases(name);
     group_end(name);
 }
 
