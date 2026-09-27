@@ -282,6 +282,10 @@ pg_pae(const char *name)
         }
         v.target_len = n;
         v.arg3       = seqs[i].setup;
+        /* Only the final sequence executes XOR EAX,EAX. Its AF is
+           undefined; the other rows preserve the producer's flags. */
+        v.fx         = seqs[i].pte == 2 ? FX_ALU : FX_NONE;
+        v.fx_arg     = 6;
         run_plain(&v, 1);
     }
 #endif
@@ -326,13 +330,116 @@ group_pg_basic(void)
 struct pg_seq {
     uint8_t  setup, defined, len, b[24];
     uint16_t setup_hi; /* pg_setup bits from 256 up, added to setup */
+    uint8_t atomic_offset; /* atomic instruction offset + 1; zero for other rows */
 };
+
+enum { PG_DEF_BT = 2 };
+
+/* Intel 242480-041: erratum 26, identification tables and summary;
+   OverDrive erratum 17 refers to the same issue. Listed affected parts
+   can raise #UD when CMPXCHG8B crosses a page boundary. */
+static int
+cx8_page_ud_erratum(void)
+{
+    if (memcmp_(g_cpu.vendor, "GenuineIntel", 12))
+        return 0;
+    switch (g_cpu.signature & 0x0fff) {
+        case 0x521: /* B1 */
+        case 0x522: /* B3 */
+        case 0x524: /* B5 */
+        case 0x525: /* C2 / mA1 */
+        case 0x52b: /* cB1 / mcB1 */
+        case 0x570: /* mA4 */
+        case 0x531: /* OverDrive B1 / B2 / C0 */
+        case 0x532: /* OverDrive C0 */
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Intel 243191-002 CMPXCHG/XADD/CMPXCHG8B and 243192-002 sections
+   4.11.3 and 5.3: with WP set, even a failed comparison must fault on
+   the read-only destination, without committing registers or flags.
+   These rows change no page tables concurrently; Pentium Pro erratum
+   69 (a remote permission change during a TLB shootdown) cannot apply. */
+static const char *
+expect_pg_atomic_wp(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    struct kout expected;
+    memset(&expected, 0, sizeof(expected));
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP)
+            *kout_reg(&expected, r) = kin_reg(in, r);
+    uint32_t flags = in->flags & F_ARITH;
+    if (v->producer == 3) {
+        expected.ecx = in->ecx + in->edx;
+        flags = oracle_addsub_flags(in->ecx, in->edx, 32, 0);
+    } else if (v->producer != 0)
+        return "atomic page-fault predicate has an unsupported producer";
+
+    /* The tagged rows prepare EAX/EDX using MOV and NOT only. Decode
+       those bytes explicitly; neither preparation instruction changes flags. */
+    unsigned n = 0;
+    while (n < v->arg2) {
+        unsigned op = v->target[n++], modrm = v->target[n++];
+        if ((op == 0x8b && (modrm == 0x43 || modrm == 0x53)) || (op == 0x8a && modrm == 0x43)) {
+            unsigned offset = MEM_OFF + v->target[n++];
+            if (offset + 4 > BUF_SIZE)
+                return "atomic page-fault preparation reads outside captured memory";
+            uint32_t value = le32(in->buf + offset);
+            if (op == 0x8a)
+                expected.eax = (expected.eax & ~255u) | (value & 255);
+            else
+                *kout_reg(&expected, (modrm >> 3) & 7) = value;
+        } else if ((op == 0xf7 || op == 0xf6) && modrm == 0xd0)
+            expected.eax ^= op == 0xf6 ? 255u : 0xffffffffu;
+        else
+            return "atomic page-fault predicate has an unknown preparation instruction";
+    }
+    if (n != v->arg2 || v->target[n] != 0x0f)
+        return "atomic page-fault predicate has an invalid instruction offset";
+    unsigned op = v->target[n + 1];
+    unsigned width = op == 0xb0 ? 1 : op == 0xc7 ? 8 : 4;
+    unsigned offset = MEM_OFF + v->target[n + 3];
+    int erratum_ud = op == 0xc7 && offset < BUF_SIZE / 2 &&
+        offset + width > BUF_SIZE / 2 && cx8_page_ud_erratum() && o->fault == 6;
+    if (erratum_ud ? o->fault_err != 0 : (o->fault != 14 || o->fault_err != 3))
+        return "atomic write to a read-only page with WP must raise supervisor write #PF";
+    if (o->fault_ip != (uint32_t)(g_target_start - g_cur_slot) + n)
+        return "atomic write #PF must identify the atomic instruction";
+    /* Split accesses may report different bytes by model. Require the
+       reported byte to belong to this operand's protected page. */
+    if (!erratum_ud && (o->fault_cr2_space || o->fault_cr2 < offset ||
+        o->fault_cr2 < BUF_SIZE / 2 || o->fault_cr2 >= offset + width))
+        return "atomic write #PF reports an address outside its protected operand";
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP && *kout_reg(&expected, r) != *kout_reg((struct kout *)o, r))
+            return "faulting atomic instruction changed a register";
+    if ((o->flags & F_ARITH) != flags || ((o->flags ^ in->flags) & 0x400))
+        return "faulting atomic instruction changed flags";
+    if (memcmp_(o->buf, in->buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
+        return "faulting atomic instruction partially changed memory";
+    return 0;
+}
+
+static int
+dm_pg_seq(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    if (!dm_fxarg(v, in, d, undef))
+        return 0;
+    /* Intel 243191-002 BT/BTS: only CF is a defined arithmetic flag.
+       On a fault the bit operation has not committed its flags. */
+    if (v->fx_arg == PG_DEF_BT && d->fault == 0xff)
+        *undef = (*undef | F_ARITH) & ~F_CF;
+    return 1;
+}
 
 static void
 pg_run_seqs(const char *name, const struct pg_seq *seqs, unsigned n, uint32_t cr0_extra)
 {
     struct variant v = { .group = name, .paging = 1, .faults_ok = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF,
-                         .fx = FX_CUSTOM, .defmask = dm_fxarg };
+                         .fx = FX_CUSTOM, .defmask = dm_pg_seq };
 #ifndef HOSTTEST
     v.before_run = pg_setup;
     v.after_run  = pg_reset; /* before the harness reads the buffer */
@@ -344,6 +451,15 @@ pg_run_seqs(const char *name, const struct pg_seq *seqs, unsigned n, uint32_t cr
         v.target_len = seqs[i].len;
         v.arg3       = seqs[i].setup | seqs[i].setup_hi;
         v.fx_arg     = seqs[i].defined;
+        v.expect     = 0;
+        v.arg2       = 0;
+        if ((cr0_extra & CR0_WP) && seqs[i].atomic_offset && g_cpu.is486) {
+            unsigned offset = seqs[i].atomic_offset - 1;
+            if (seqs[i].b[offset + 1] != 0xc7 || (g_cpu.features & (1u << 8))) {
+                v.arg2 = offset;
+                v.expect = expect_pg_atomic_wp;
+            }
+        }
         run_plain(&v, 1);
     }
     pg_end(name);
@@ -380,22 +496,23 @@ static const struct pg_seq pg_ro_seqs[] = {
     { 4, 1, SEQ(0x89, 0x4b, 0x18) },       /* mov [ebx+24], ecx */
     { 4, 1, SEQ(0x01, 0x53, 0x18) },       /* add [ebx+24], edx */
     { 4, 1, SEQ(0x87, 0x43, 0x18) },       /* xchg [ebx+24], eax */
-    { 4, 1, SEQ(0x0f, 0xb1, 0x4b, 0x18) }, /* cmpxchg [ebx+24], ecx */
+    { 4, 1, SEQ(0x0f, 0xb1, 0x4b, 0x18), .atomic_offset = 1 }, /* cmpxchg [ebx+24], ecx */
     { 4, 1, SEQ(0x89, 0x4b, 0x16) },       /* mov [ebx+22], ecx: half on each page */
     { 4, 1, SEQ(0x88, 0x4b, 0x17) },       /* mov [ebx+23], cl: the writable page */
     /* Read-modify-write: CMPXCHG and CMPXCHG8B write whether the compare
        succeeds or not (a failed one writes the old value back), so both
-       fault with WP; the failed compares are raw only. */
-    { 4, 1, SEQ(0x8b, 0x43, 0x18, 0x0f, 0xb1, 0x4b, 0x18) },                   /* cmpxchg, equal */
-    { 4, 0, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xb1, 0x4b, 0x18) },       /* cmpxchg, not */
-    { 4, 0, SEQ(0x8a, 0x43, 0x18, 0xf6, 0xd0, 0x0f, 0xb0, 0x4b, 0x18) },       /* byte, not */
-    { 4, 1, SEQ(0x8b, 0x43, 0x18, 0x8b, 0x53, 0x1c, 0x0f, 0xc7, 0x4b, 0x18) }, /* cmpxchg8b, equal */
-    { 4, 0, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xc7, 0x4b, 0x18) },       /* cmpxchg8b, not */
-    { 4, 1, SEQ(0x0f, 0xc1, 0x43, 0x18) },                                     /* xadd */
-    { 4, 1, SEQ(0xf0, 0x0f, 0xba, 0x6b, 0x18, 0x05) },                         /* lock bts */
-    { 4, 1, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },                               /* bt: a read */
+       fault with WP. The WP rows also have independent fault/state
+       expectations; raw-only CRC entries do not disable those checks. */
+    { 4, 1, SEQ(0x8b, 0x43, 0x18, 0x0f, 0xb1, 0x4b, 0x18), .atomic_offset = 4 }, /* cmpxchg, equal */
+    { 4, 0, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xb1, 0x4b, 0x18), .atomic_offset = 6 }, /* cmpxchg, not */
+    { 4, 0, SEQ(0x8a, 0x43, 0x18, 0xf6, 0xd0, 0x0f, 0xb0, 0x4b, 0x18), .atomic_offset = 6 }, /* byte, not */
+    { 4, 1, SEQ(0x8b, 0x43, 0x18, 0x8b, 0x53, 0x1c, 0x0f, 0xc7, 0x4b, 0x18), .atomic_offset = 7 }, /* cmpxchg8b, equal */
+    { 4, 0, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xc7, 0x4b, 0x18), .atomic_offset = 6 }, /* cmpxchg8b, not */
+    { 4, 1, SEQ(0x0f, 0xc1, 0x43, 0x18), .atomic_offset = 1 }, /* xadd */
+    { 4, PG_DEF_BT, SEQ(0xf0, 0x0f, 0xba, 0x6b, 0x18, 0x05) },                 /* lock bts */
+    { 4, PG_DEF_BT, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },                       /* bt: a read */
     { 4, 1, SEQ(0xf0, 0x83, 0x43, 0x18, 0x00) },                               /* lock add 0 */
-    { 4, 1, SEQ(0x8b, 0x43, 0x14, 0x8b, 0x53, 0x18, 0x0f, 0xc7, 0x4b, 0x14) }, /* cmpxchg8b equal, its high dword on the
+    { 4, 1, SEQ(0x8b, 0x43, 0x14, 0x8b, 0x53, 0x18, 0x0f, 0xc7, 0x4b, 0x14), .atomic_offset = 7 }, /* cmpxchg8b equal, its high dword on the
                                                                                   read-only page: nothing written */
     /* The alias page through a read-only PDE: the stricter level counts. */
     { 128, 1, SEQ(RD_ALIAS, GET_PDE), 256 },
@@ -453,7 +570,7 @@ group_pg_ad(void)
         { 0, 1, 1, SEQ(0x8b, 0x43, 0x18, 0x0f, 0xb1, 0x4b, 0x18) },       /* cmpxchg, equal */
         { 0, 0, 1, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xb1, 0x4b, 0x18) }, /* cmpxchg, not */
         { 0, 0, 1, SEQ(0x8b, 0x43, 0x18, 0xf7, 0xd0, 0x0f, 0xc7, 0x4b, 0x18) }, /* cmpxchg8b, not */
-        { 0, 1, 1, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },                   /* bt: A only */
+        { 0, PG_DEF_BT, 1, SEQ(0x0f, 0xba, 0x63, 0x18, 0x05) },           /* bt: A only */
         { 128, 1, 0, SEQ(RD_ALIAS, GET_PDE, GET_APTE) },
         { 128, 1, 0, SEQ(WR_ALIAS, GET_PDE, GET_APTE) },
     };

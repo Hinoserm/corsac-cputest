@@ -519,8 +519,16 @@ group_bs(void)
 static void
 fix_cx(const struct variant *v)
 {
-    fix_rm(v);
-    uint32_t dst = get_opnd(v->arg2, v->arg);
+    uint32_t dst;
+    if (v->arg3) {
+#ifdef HOSTTEST
+        g_skip = 1; /* the host's buffer is not in the 16-bit address space */
+#endif
+        dst = le32(g_in.lowbuf + 4) & szmask(v->arg);
+    } else {
+        fix_rm(v);
+        dst = get_opnd(v->arg2, v->arg);
+    }
     switch (edge(2)) {
         case 0: set_opnd(R_EAX, v->arg, dst); break;
         case 1: set_opnd(R_EAX, v->arg, dst ^ 1); break;
@@ -533,11 +541,17 @@ fix_cx(const struct variant *v)
 static void
 fix_cx8(const struct variant *v)
 {
-    g_in.esi = (uint32_t) g_buf + MEM_OFF;
+    const uint8_t *memory = v->arg3 ? g_in.lowbuf + 4 : g_in.buf + MEM_OFF;
+    if (v->arg3) {
+#ifdef HOSTTEST
+        g_skip = 1;
+#endif
+    } else
+        g_in.esi = (uint32_t) g_buf + MEM_OFF;
     int e    = edge(2);
     if (e >= 0) {
-        g_in.eax = le32(g_in.buf + MEM_OFF) ^ e;
-        g_in.edx = le32(g_in.buf + MEM_OFF + 4);
+        g_in.eax = le32(memory) ^ e;
+        g_in.edx = le32(memory + 4);
     }
 }
 
@@ -555,17 +569,17 @@ dm_cx8(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *
    the first execution as the expected answer. Width is explicit so the
    model also covers high-byte aliases and identical operands. */
 static uint32_t
-oracle_opnd(const struct kout *o, int r, int size)
+oracle_opnd(const struct kout *o, int r, int size, const uint8_t *memory)
 {
-    if (r == RM_MEM) return le32(o->buf + MEM_OFF) & szmask(size);
+    if (r == RM_MEM) return le32(memory) & szmask(size);
     if (size == 8) return (*kout_reg((struct kout *)o, r & 3) >> (r < 4 ? 0 : 8)) & 255;
     return *kout_reg((struct kout *)o, r) & szmask(size);
 }
 
 static void
-oracle_set_opnd(struct kout *o, int r, int size, uint32_t value)
+oracle_set_opnd(struct kout *o, int r, int size, uint32_t value, uint8_t *memory)
 {
-    if (r == RM_MEM) {put_le(o->buf + MEM_OFF, value, size / 8); return;}
+    if (r == RM_MEM) {put_le(memory, value, size / 8); return;}
     unsigned shift = size == 8 && r >= 4 ? 8 : 0;
     uint32_t mask = szmask(size) << shift;
     uint32_t *reg = kout_reg(o, size == 8 ? r & 3 : r);
@@ -588,45 +602,92 @@ oracle_addsub_flags(uint32_t a, uint32_t b, int size, int sub)
 static const char *
 expect_cx(const struct variant *v, const struct kin *in, const struct kout *o)
 {
+    if (v->producer != 0 && v->producer != 1 && v->producer != 3)
+        return "CMPXCHG/XADD predicate has an unsupported producer";
+    struct kout expected;
+    memset(&expected, 0, sizeof(expected));
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP)
+            *kout_reg(&expected, r) = kin_reg(in, r);
+    memcpy(expected.buf, in->buf, BUF_SIZE);
+    memcpy(expected.lowbuf, in->lowbuf, LOWBUF_SIZE);
+    if ((o->flags ^ in->flags) & 0x400)
+        return "CMPXCHG/XADD changed DF";
+    uint8_t *memory = v->arg3 ? expected.lowbuf + 4 : expected.buf + MEM_OFF;
+    uint32_t incoming_flags = in->flags & F_ARITH;
+    if (v->producer == 1)
+        incoming_flags = oracle_addsub_flags(in->ecx, in->edx, 32, 1);
+    else if (v->producer == 3) {
+        incoming_flags = oracle_addsub_flags(in->ecx, in->edx, 32, 0);
+        expected.ecx = in->ecx + in->edx;
+    }
     unsigned n = 0, size = 32, locked = 0;
+    if (v->target[n] == 0x67) n++; /* a16 register or direct disp16 operand */
     if (v->target[n] == 0xf0) {locked = 1; n++;}
     if (v->target[n] == 0x66) {size = 16; n++;}
     n++; /* 0F */
     unsigned op = v->target[n++], modrm = v->target[n];
     unsigned src = (modrm >> 3) & 7, dst = (modrm & 0xc0) == 0xc0 ? modrm & 7 : RM_MEM;
-    if ((locked && dst != RM_MEM) || (op == 0xc7 && dst != RM_MEM))
-        return o->fault != 6 ? "illegal CMPXCHG/XADD encoding must raise #UD" : 0;
+    if ((locked && dst != RM_MEM) || (op == 0xc7 && (dst != RM_MEM || src != 1))) {
+        if (o->fault != 6 || o->fault_err ||
+            o->fault_ip != (uint32_t) (g_target_start - g_cur_slot))
+            return "illegal CMPXCHG/XADD must fault at its first prefix with #UD";
+        for (unsigned r = 0; r < 8; r++)
+            if (r != R_ESP && *kout_reg(&expected, r) != *kout_reg((struct kout *) o, r))
+                return "illegal CMPXCHG/XADD changed a register before #UD";
+        if ((o->flags & F_ARITH) != incoming_flags ||
+            memcmp_(o->buf, in->buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
+            return "illegal CMPXCHG/XADD changed flags or memory before #UD";
+        return 0;
+    }
     if (o->fault != 0xff) return "valid CMPXCHG/XADD unexpectedly faulted";
-    struct kout expected;
-    memset(&expected, 0, sizeof(expected));
-    for (unsigned r = 0; r < 8; r++) if (r != R_ESP) *kout_reg(&expected,r) = kin_reg(in,r);
-    memcpy(expected.buf,in->buf,BUF_SIZE);
     uint32_t flags, flag_mask = F_ARITH;
     if (op == 0xc7) {
-        uint32_t lo=le32(in->buf+MEM_OFF), hi=le32(in->buf+MEM_OFF+4);
+        uint32_t lo=le32(memory), hi=le32(memory+4);
         int equal=in->eax==lo && in->edx==hi;
-        if (equal) {put_le(expected.buf+MEM_OFF,in->ebx,4);put_le(expected.buf+MEM_OFF+4,in->ecx,4);}
+        if (equal) {put_le(memory,expected.ebx,4);put_le(memory+4,expected.ecx,4);}
         else {expected.eax=lo;expected.edx=hi;}
-        flags=equal?F_ZF:0;flag_mask=F_ZF;
+        /* CMPXCHG8B changes ZF only. Account for run_keep's CMP producer
+           independently when checking every preserved arithmetic flag. */
+        flags = incoming_flags;
+        flags = (flags & ~F_ZF) | (equal ? F_ZF : 0);
     } else {
         if (!(op & 1)) size=8;
-        uint32_t a=oracle_opnd(&expected,dst,size), b=oracle_opnd(&expected,src,size);
+        uint32_t a=oracle_opnd(&expected,dst,size,memory), b=oracle_opnd(&expected,src,size,memory);
         if ((op & 0xfe)==0xc0) {
             flags=oracle_addsub_flags(a,b,size,0);
-            oracle_set_opnd(&expected,src,size,a);
-            oracle_set_opnd(&expected,dst,size,a+b);
+            oracle_set_opnd(&expected,src,size,a,memory);
+            oracle_set_opnd(&expected,dst,size,a+b,memory);
         } else {
-            uint32_t acc=oracle_opnd(&expected,R_EAX,size);
+            uint32_t acc=oracle_opnd(&expected,R_EAX,size,memory);
             flags=oracle_addsub_flags(acc,a,size,1);
-            if (acc==a) oracle_set_opnd(&expected,dst,size,b);
-            else oracle_set_opnd(&expected,R_EAX,size,a);
+            if (acc==a) oracle_set_opnd(&expected,dst,size,b,memory);
+            else oracle_set_opnd(&expected,R_EAX,size,a,memory);
         }
     }
     for (unsigned r=0;r<8;r++) if(r!=R_ESP && *kout_reg(&expected,r)!=*kout_reg((struct kout *)o,r))
         return "CMPXCHG/XADD register result violates arithmetic/exchange definition";
     if(memcmp_(expected.buf,o->buf,BUF_SIZE)) return "CMPXCHG/XADD memory result or adjacent bytes";
+    if(memcmp_(expected.lowbuf,o->lowbuf,LOWBUF_SIZE)) return "CMPXCHG/XADD a16 memory result or adjacent bytes";
     if((o->flags & flag_mask)!=flags) return "CMPXCHG/XADD arithmetic flags";
     return 0;
+}
+
+/* Both address-size decoder paths contain the register writeback fix.
+   67h changes the decoder path, but a ModR/M register operand is still
+   the same register (Intel 243191-002 instruction encoding tables). */
+static void
+run_cx_register_forms(struct variant *v, int inputs)
+{
+    run_keep(v, inputs);
+    for (unsigned i = v->target_len; i; i--)
+        v->target[i] = v->target[i - 1];
+    v->target[0] = 0x67;
+    v->target_len++;
+    run_keep(v, inputs);
+    v->target_len--;
+    for (unsigned i = 0; i < v->target_len; i++)
+        v->target[i] = v->target[i + 1];
 }
 
 static void
@@ -634,8 +695,8 @@ group_cmpxchg(void)
 {
     /* (destination, source); a destination past RM_MEM is locked memory.
        The first has the accumulator as the destination. */
-    static const uint8_t pairs8[5][2]  = { { 0, 2 }, { 1, 2 }, { 7, 5 }, { RM_MEM, 2 }, { RM_MEM + 1, 2 } };
-    static const uint8_t pairs32[5][2] = { { R_EAX, R_EDX }, { R_ECX, R_EDX }, { R_ESI, R_EDI }, { RM_MEM, R_EDX }, { RM_MEM + 1, R_EDX } };
+    static const uint8_t pairs8[][2]  = { { 0, 2 }, { 1, 2 }, { 7, 5 }, { RM_MEM, 2 }, { RM_MEM + 1, 2 }, { 1, 1 } };
+    static const uint8_t pairs32[][2] = { { R_EAX, R_EDX }, { R_ECX, R_EDX }, { R_ESI, R_EDI }, { RM_MEM, R_EDX }, { RM_MEM + 1, R_EDX }, { R_ECX, R_ECX } };
     const char          *name          = "cmpxchg.xadd";
     struct variant       v             = { .group = name, .fx = FX_CUSTOM, .defmask = dm_alldef, .expect = expect_cx };
     if (!g_cpu.is486) {
@@ -646,7 +707,7 @@ group_cmpxchg(void)
     for (int op = 0; op < 2; op++) { /* CMPXCHG 0F B0/B1, XADD 0F C0/C1 */
         uint8_t op8 = op ? 0xc0 : 0xb0;
         for (int size = 8; size <= 32; size *= 2) {
-            for (int p = 0; p < 5; p++) {
+            for (unsigned p = 0; p < sizeof(pairs32) / sizeof(pairs32[0]); p++) {
                 const uint8_t *pr  = size == 8 ? pairs8[p] : pairs32[p];
                 int            dst = pr[0], rm = dst > RM_MEM ? RM_MEM : dst, n = 0;
                 if (dst > RM_MEM)
@@ -660,8 +721,34 @@ group_cmpxchg(void)
                 v.arg         = size;
                 v.faults_ok   = 0;
                 set_fix_rm(&v, rm, fix_cx);
+                if (rm == RM_MEM)
+                    run_keep(&v, 3);
+                else
+                    run_cx_register_forms(&v, 3);
+            }
+            /* Direct disp16 reaches the low buffer without consuming a
+               data register as an address. Both a16 memory handlers and
+               both comparison outcomes use the same independent oracle. */
+            for (int locked = 0; locked < 2; locked++) {
+                int n = 0;
+                v.target[n++] = 0x67;
+                if (locked)
+                    v.target[n++] = 0xf0;
+                if (size == 16)
+                    v.target[n++] = 0x66;
+                v.target[n++] = 0x0f;
+                v.target[n++] = size == 8 ? op8 : op8 | 1;
+                v.target[n++] = 0x06 | (R_EDX << 3);
+                put_le(v.target + n, (uint32_t) LOWBUF + 4, 2);
+                v.target_len = n + 2;
+                v.arg = size;
+                v.arg3 = 1;
+                v.faults_ok = 0;
+                set_fix_rm(&v, RM_MEM, fix_cx);
+                v.norm = 0;
                 run_keep(&v, 3);
             }
+            v.arg3 = 0;
             /* LOCK on a register destination: #UD */
             {
                 int n = 0;
@@ -683,17 +770,55 @@ group_cmpxchg(void)
     if (g_cpu.features & (1u << 8)) { /* CX8 */
         static const struct {
             uint8_t len, b[4];
-        } forms[] = { { SEQ(0x0f, 0xc7, 0x0e) }, { SEQ(0xf0, 0x0f, 0xc7, 0x0e) }, { SEQ(0x0f, 0xc7, 0xc9) } };
-        for (int f = 0; f < 3; f++) {
+        } forms[] = {
+            { SEQ(0x0f, 0xc7, 0x0e) }, { SEQ(0xf0, 0x0f, 0xc7, 0x0e) },
+            { SEQ(0x0f, 0xc7, 0xc9) },
+            /* /0 and /2 must not alias /1 (CMPXCHG8B). */
+            { SEQ(0x0f, 0xc7, 0x06) }, { SEQ(0x0f, 0xc7, 0x16) },
+        };
+        for (unsigned f = 0; f < sizeof(forms) / sizeof(forms[0]); f++) {
             memcpy(v.target, forms[f].b, forms[f].len);
             v.target_len = forms[f].len;
             v.defmask    = dm_cx8;
             v.fix_input  = fix_cx8;
             v.reg_fix    = 0;
             v.norm       = 1 << R_ESI;
-            v.faults_ok  = f == 2; /* the register form is #UD */
+            v.faults_ok  = f >= 2; /* register form and non-/1 encodings are #UD */
+            if (f == 2)
+                run_cx_register_forms(&v, 3);
+            else
+                run_keep(&v, 3);
+        }
+        for (int locked = 0; locked < 2; locked++) {
+            int n = 0;
+            v.target[n++] = 0x67;
+            if (locked)
+                v.target[n++] = 0xf0;
+            v.target[n++] = 0x0f;
+            v.target[n++] = 0xc7;
+            v.target[n++] = 0x0e; /* /1, direct disp16 */
+            put_le(v.target + n, (uint32_t) LOWBUF + 4, 2);
+            v.target_len = n + 2;
+            v.arg3 = 1;
+            v.norm = 0;
+            v.faults_ok = 0;
             run_keep(&v, 3);
         }
+        /* Check the /1 decoder restriction in a16 as well, with a fully
+           encoded direct memory operand and no LOCK prefix. */
+        for (unsigned ext = 0; ext <= 2; ext++) {
+            if (ext == 1)
+                continue;
+            v.target[0] = 0x67;
+            v.target[1] = 0x0f;
+            v.target[2] = 0xc7;
+            v.target[3] = 0x06 | (ext << 3);
+            put_le(v.target + 4, (uint32_t) LOWBUF + 4, 2);
+            v.target_len = 6;
+            v.faults_ok = 1;
+            run_keep(&v, 3);
+        }
+        v.arg3 = 0;
     }
     /* XADD r8, r8 with every pair of byte registers (the same one twice,
        high halves on both sides): a recompiler's register allocation for
@@ -704,7 +829,7 @@ group_cmpxchg(void)
         x.target[1]  = 0xc0;
         x.target[2]  = m;
         x.target_len = 3;
-        run_keep(&x, 1);
+        run_cx_register_forms(&x, 1);
     }
     group_end(name);
 }

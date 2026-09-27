@@ -105,6 +105,33 @@ group_r2_limits(void)
     limits_run("r2.limits", 2, 0);
 }
 
+/* CMPXCHG8B's complete eight-byte operand must fit the FS limit (Intel
+   243191-002, 3-103). FFAh..1001h crosses the fixture's FFFh limit. */
+static const char *
+expect_cx8_limit(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    if (o->fault != 13 || o->fault_err ||
+        o->fault_ip != (uint32_t)(g_target_start - g_cur_slot) + 11)
+        return "CMPXCHG8B crossing FS limit must raise #GP(0) at its FS prefix";
+    uint32_t flags = in->flags & F_ARITH;
+    uint32_t ecx = in->ecx;
+    if (v->producer == 3) {
+        flags = oracle_addsub_flags(in->ecx, in->edx, 32, 0);
+        ecx += in->edx;
+    } else if (v->producer != 0)
+        return "CMPXCHG8B limit predicate has an unsupported producer";
+    /* MOV AX,selector; MOV FS,AX; MOV EBX,FFAh precede the fault. */
+    if (o->eax != ((in->eax & 0xffff0000u) | (SEL_SCRATCH | 1)) ||
+        o->ebx != 0xffa || o->ecx != ecx || o->edx != in->edx ||
+        o->ebp != in->ebp || o->esi != in->esi || o->edi != in->edi)
+        return "CMPXCHG8B segment fault changed operand registers";
+    if ((o->flags & F_ARITH) != flags || ((o->flags ^ in->flags) & 0x400))
+        return "CMPXCHG8B segment fault changed flags";
+    if (memcmp_(o->buf, in->buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
+        return "CMPXCHG8B segment fault changed memory";
+    return 0;
+}
+
 /* Operands that straddle a segment limit must #GP whatever the
    instruction does with them; 86Box checked only some of them. FS the
    scratch descriptor as byte-granular read/write data with limit FFFh
@@ -144,6 +171,7 @@ limits_ops(const char *name)
         n = sizeof(fs);
         memcpy(v.target + n, seqs[i].b, seqs[i].len);
         v.target_len = n + seqs[i].len;
+        v.expect = seqs[i].need == 2 ? expect_cx8_limit : 0;
         run_plain(&v, 1);
     }
 }
