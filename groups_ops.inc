@@ -399,6 +399,8 @@ group_shift(void)
 
 /* ---- SHLD, SHRD ----------------------------------------------------------- */
 
+static const char *expect_shd(const struct variant *, const struct kin *, const struct kout *);
+
 static int
 dm_shd(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
 {
@@ -406,8 +408,11 @@ dm_shd(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *
 
     if (d->fault != 0xff || !c)
         return 1;
-    if (v->arg == 16 && c > 16)
-        return 0; /* result and flags undefined */
+    if (v->arg == 16 && c >= 16)
+        /* 386/486/Pentium/PPro pseudocode makes COUNT >= SIZE undefined.
+           The 1999 prose says > instead; do not make equality a portable
+           assertion across these processors while those sources conflict. */
+        return 0;
     *undef = (*undef & ~(F_SF | F_ZF | F_PF | F_CF | F_OF)) | F_AF;
     if (c != 1)
         *undef |= F_OF;
@@ -420,7 +425,7 @@ group_shd(void)
     static const uint8_t ops[4]      = { 0xa4, 0xa5, 0xac, 0xad }; /* SHLD imm, SHLD CL, SHRD imm, SHRD CL */
     static const uint8_t pairs[3][2] = { { R_EAX, R_EDX }, { RM_MEM, R_EDI }, { R_ESI, R_ESI } }; /* dst, src */
     const char          *name        = "shld.shrd";
-    struct variant       v           = { .group = name, .fx = FX_CUSTOM, .defmask = dm_shd };
+    struct variant       v           = { .group = name, .fx = FX_CUSTOM, .defmask = dm_shd, .expect = expect_shd };
     group_begin(name);
     for (int o = 0; o < 4; o++) {
         int by_cl = ops[o] & 1;
@@ -823,6 +828,69 @@ expect_bt(const struct variant *v, const struct kin *in, const struct kout *o)
             return "bit-test register result or preserved registers";
     if (memcmp_(o->buf, expected.buf, BUF_SIZE) || memcmp_(o->lowbuf, expected.lowbuf, LOWBUF_SIZE))
         return "bit-test memory result or surrounding bytes";
+    return 0;
+}
+
+/* Reconstruct each destination bit from the documented direction of
+   SHLD/SHRD. Avoid the emulator's concatenation/shift implementation. */
+static const char *
+expect_shd(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    unsigned count = count_of(v, in), size = v->arg;
+    if (size == 16 && count >= 16)
+        return 0; /* conflicting old manuals: no portable result assertion */
+    if (o->fault != 0xff)
+        return "valid double-shift instruction unexpectedly faulted";
+    struct kout expected;
+    memset(&expected, 0, sizeof(expected));
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP)
+            *kout_reg(&expected, r) = kin_reg(in, r);
+    memcpy(expected.buf, in->buf, BUF_SIZE);
+    uint32_t flags = in->flags & F_ARITH;
+    if (v->producer == 1)
+        flags = oracle_addsub_flags(in->ecx, in->edx, 32, 1);
+    else if (v->producer == 3) {
+        flags = oracle_addsub_flags(in->ecx, in->edx, 32, 0);
+        expected.ecx = in->ecx + in->edx;
+    } else if (v->producer != 0)
+        return "double-shift predicate has an unsupported producer";
+    unsigned n = size == 16 ? 1 : 0;
+    unsigned op = v->target[n + 1], modrm = v->target[n + 2];
+    unsigned src = (modrm >> 3) & 7, dst = (modrm & 0xc0) == 0xc0 ? modrm & 7 : RM_MEM;
+    uint8_t *memory = expected.buf + MEM_OFF;
+    uint32_t original = oracle_opnd(&expected, dst, size, memory);
+    uint32_t source = oracle_opnd(&expected, src, size, memory);
+    uint32_t result = 0, flag_mask = F_ARITH;
+    for (unsigned bit = 0; bit < size; bit++) {
+        uint32_t value;
+        if (op & 8) /* SHRD: low source bits enter at the top */
+            value = bit + count < size ? original >> (bit + count) : source >> (bit + count - size);
+        else /* SHLD: high source bits enter at the bottom */
+            value = bit >= count ? original >> (bit - count) : source >> (size - count + bit);
+        result |= (value & 1) << bit;
+    }
+    oracle_set_opnd(&expected, dst, size, result, memory);
+    if (count) {
+        unsigned parity = 0;
+        for (unsigned bit = 0; bit < 8; bit++) parity ^= (result >> bit) & 1;
+        unsigned carry_bit = op & 8 ? count - 1 : size - count;
+        uint32_t sign = 1u << (size - 1);
+        flags = ((original >> carry_bit) & 1) | (!parity ? F_PF : 0) |
+            (!result ? F_ZF : 0) | (result & sign ? F_SF : 0);
+        flag_mask = F_CF | F_PF | F_ZF | F_SF;
+        if (count == 1) {
+            flag_mask |= F_OF;
+            if ((original ^ result) & sign) flags |= F_OF;
+        }
+    }
+    if ((o->flags & flag_mask) != flags || ((o->flags ^ in->flags) & 0x400))
+        return "double-shift defined flags disagree with bit-by-bit result";
+    for (unsigned r = 0; r < 8; r++)
+        if (r != R_ESP && *kout_reg(&expected, r) != *kout_reg((struct kout *)o, r))
+            return "double-shift register result or preserved registers";
+    if (memcmp_(o->buf, expected.buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
+        return "double-shift memory result or surrounding bytes";
     return 0;
 }
 

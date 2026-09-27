@@ -331,6 +331,7 @@ struct pg_seq {
     uint8_t  setup, defined, len, b[24];
     uint16_t setup_hi; /* pg_setup bits from 256 up, added to setup */
     uint8_t atomic_offset; /* atomic instruction offset + 1; zero for other rows */
+    uint8_t rotate_offset; /* rotate instruction offset + 1; zero for other rows */
 };
 
 enum { PG_DEF_BT = 2 };
@@ -435,6 +436,47 @@ dm_pg_seq(const struct variant *v, const struct kin *in, struct kout *d, uint16_
     return 1;
 }
 
+/* A failed rotate store must retain every pre-instruction arithmetic
+   flag, including the lazy producer's CF/OF (Intel 243192-002, 5.3). */
+static const char *
+expect_pg_rotate_wp(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    unsigned n = v->arg2;
+    unsigned width = v->target[n] == 0x66 ? 2 : (v->target[n] & 1) ? 4 : 1;
+    if (o->fault != 14 || o->fault_err != 3 ||
+        o->fault_ip != (uint32_t)(g_target_start - g_cur_slot) + n)
+        return "read-only rotate destination with WP must fault at its first prefix";
+    if (o->fault_cr2_space || o->fault_cr2 < 32 || o->fault_cr2 >= 32 + width)
+        return "rotate write #PF reports an address outside the operand";
+    uint32_t ecx = in->ecx, flags = in->flags & F_ARITH;
+    if (v->producer == 3) {
+        ecx += in->edx;
+        flags = oracle_addsub_flags(in->ecx, in->edx, 32, 0);
+    } else if (v->producer != 0)
+        return "rotate page-fault predicate has an unsupported producer";
+    if (n == 2) /* MOV CL,1 precedes each variable-count row. */
+        ecx = (ecx & ~255u) | 1;
+    if (o->eax != in->eax || o->ecx != ecx || o->edx != in->edx ||
+        o->ebx != in->ebx || o->ebp != in->ebp || o->esi != in->esi || o->edi != in->edi)
+        return "faulting rotate changed a register";
+    if ((o->flags & F_ARITH) != flags || ((o->flags ^ in->flags) & 0x400))
+        return "faulting rotate lost the previous instruction's flags";
+    if (memcmp_(o->buf, in->buf, BUF_SIZE) || memcmp_(o->lowbuf, in->lowbuf, LOWBUF_SIZE))
+        return "faulting rotate changed memory";
+    return 0;
+}
+
+static void
+fix_pg_rotate_wp(const struct variant *v)
+{
+    fix_mem_ebx(v);
+    /* ADD ECX,EDX changes CF=1/OF=0 into CF=0/OF=1. A partial flag
+       rebuild must not accidentally pass because the old bits matched. */
+    g_in.ecx = 0x7fffffffu;
+    g_in.edx = 1;
+    g_in.flags = (g_in.flags & ~(F_CF | F_OF)) | F_CF;
+}
+
 static void
 pg_run_seqs(const char *name, const struct pg_seq *seqs, unsigned n, uint32_t cr0_extra)
 {
@@ -453,6 +495,8 @@ pg_run_seqs(const char *name, const struct pg_seq *seqs, unsigned n, uint32_t cr
         v.fx_arg     = seqs[i].defined;
         v.expect     = 0;
         v.arg2       = 0;
+        v.fix_input  = fix_mem_ebx;
+        v.norm       = 0;
         if ((cr0_extra & CR0_WP) && seqs[i].atomic_offset && g_cpu.is486) {
             unsigned offset = seqs[i].atomic_offset - 1;
             if (seqs[i].b[offset + 1] != 0xc7 || (g_cpu.features & (1u << 8))) {
@@ -460,7 +504,19 @@ pg_run_seqs(const char *name, const struct pg_seq *seqs, unsigned n, uint32_t cr
                 v.expect = expect_pg_atomic_wp;
             }
         }
+        if ((cr0_extra & CR0_WP) && seqs[i].rotate_offset) {
+            v.arg2 = seqs[i].rotate_offset - 1;
+            v.expect = expect_pg_rotate_wp;
+            v.fix_input = fix_pg_rotate_wp;
+            v.norm = 1 << R_EBX;
+        }
         run_plain(&v, 1);
+        if (v.expect) {
+            /* Also retain lazy producer flags in the same compiled block. */
+            v.producer = 3;
+            v.boundary = 0;
+            run_inputs(&v, 1);
+        }
     }
     pg_end(name);
 }
@@ -517,6 +573,26 @@ static const struct pg_seq pg_ro_seqs[] = {
     /* The alias page through a read-only PDE: the stricter level counts. */
     { 128, 1, SEQ(RD_ALIAS, GET_PDE), 256 },
     { 128, 1, SEQ(WR_ALIAS), 256 },
+    /* All ROL/ROR widths and count encodings reach the changed memory
+       flag-rebuild paths. Count one always requires the write. */
+    { 4, 1, SEQ(0xc0, 0x43, 0x18, 1), .rotate_offset = 1 },
+    { 4, 1, SEQ(0xc0, 0x4b, 0x18, 1), .rotate_offset = 1 },
+    { 4, 1, SEQ(0x66, 0xc1, 0x43, 0x18, 1), .rotate_offset = 1 },
+    { 4, 1, SEQ(0x66, 0xc1, 0x4b, 0x18, 1), .rotate_offset = 1 },
+    { 4, 1, SEQ(0xc1, 0x43, 0x18, 1), .rotate_offset = 1 },
+    { 4, 1, SEQ(0xc1, 0x4b, 0x18, 1), .rotate_offset = 1 },
+    { 4, 1, SEQ(0xd0, 0x43, 0x18), .rotate_offset = 1 },
+    { 4, 1, SEQ(0xd0, 0x4b, 0x18), .rotate_offset = 1 },
+    { 4, 1, SEQ(0x66, 0xd1, 0x43, 0x18), .rotate_offset = 1 },
+    { 4, 1, SEQ(0x66, 0xd1, 0x4b, 0x18), .rotate_offset = 1 },
+    { 4, 1, SEQ(0xd1, 0x43, 0x18), .rotate_offset = 1 },
+    { 4, 1, SEQ(0xd1, 0x4b, 0x18), .rotate_offset = 1 },
+    { 4, 1, SEQ(0xb1, 1, 0xd2, 0x43, 0x18), .rotate_offset = 3 },
+    { 4, 1, SEQ(0xb1, 1, 0xd2, 0x4b, 0x18), .rotate_offset = 3 },
+    { 4, 1, SEQ(0xb1, 1, 0x66, 0xd3, 0x43, 0x18), .rotate_offset = 3 },
+    { 4, 1, SEQ(0xb1, 1, 0x66, 0xd3, 0x4b, 0x18), .rotate_offset = 3 },
+    { 4, 1, SEQ(0xb1, 1, 0xd3, 0x43, 0x18), .rotate_offset = 3 },
+    { 4, 1, SEQ(0xb1, 1, 0xd3, 0x4b, 0x18), .rotate_offset = 3 },
 };
 
 static void
