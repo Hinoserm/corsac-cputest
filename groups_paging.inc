@@ -704,7 +704,8 @@ group_pg_string(void)
         v.target_len = seqs[i].len;
         v.arg2       = i;
         v.arg3       = seqs[i].setup;
-        run_plain(&v, 1);
+        /* Preserve the prepared REP count instead of adding random EDX. */
+        run_keep(&v, 1);
     }
     pg_end(name);
 }
@@ -747,7 +748,8 @@ emit_smc_alias(struct emit *e, const struct variant *v)
     e8(e, 0x00);
     g_smc_page = (uint32_t) (l + 1) & ~0xfffu;
     g_smc_patch = l + 1;
-    g_smc_orig  = 0x00;
+    g_smc_orig[0] = 0x00;
+    g_smc_size = 1;
     put_le(store + 2, PG_ALIAS_LIN + (((uint32_t) (l + 1)) & 0xfff), 4);
 }
 

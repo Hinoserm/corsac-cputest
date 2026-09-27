@@ -103,6 +103,21 @@ group_cpuid(void)
 /* Which MSRs a model has: RDMSR of each, then EDX:EAX cleared, so only
    whether it faulted (#GP) remains (most values are volatile or set by
    the BIOS). */
+static const char *
+expect_msr_read_fault(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    if (o->fault == 13) {
+        /* MOV ECX,imm32 precedes RDMSR; neither producer changes EDX:EAX.
+           Intel 243191-002 RDMSR and 243192-002 section 5.3: #GP is a
+           fault, before the destination write and before the XOR cleanup. */
+        if (o->fault_err || o->fault_ip != (uint32_t) (g_target_start - g_cur_slot) + 5)
+            return "RDMSR #GP must identify RDMSR with error code zero";
+        if (o->eax != in->eax || o->edx != in->edx)
+            return "faulting RDMSR changed EDX:EAX";
+    }
+    return 0;
+}
+
 static void
 group_msr_map(void)
 {
@@ -120,7 +135,8 @@ group_msr_map(void)
         0xc0010000, 0x40000000, 0xffffffff,
     };
     const char    *name = "msr.map";
-    struct variant v    = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_arg3 };
+    struct variant v    = { .group = name, .faults_ok = 1, .fx = FX_CUSTOM, .defmask = dm_arg3,
+                           .expect = expect_msr_read_fault };
     if (!(g_cpu.features & CPUID_MSR)) {
         group_skip(name, "no MSRs");
         return;

@@ -594,7 +594,9 @@ static const struct producer producers[] = {
     { "add8", 2, { 0x00, 0xd1 }, 0 },
     { "sub16", 3, { 0x66, 0x29, 0xd1 }, 0 },
     { "imul", 3, { 0x0f, 0xaf, 0xca }, F_SF | F_ZF | F_AF | F_PF },
-    { "bt", 3, { 0x0f, 0xa3, 0xd1 }, F_OF | F_SF | F_AF | F_PF },
+    /* Intel 243191-002 BT lists ZF as undefined as well. The common
+       projection must not rely on a later manual preserving it. */
+    { "bt", 3, { 0x0f, 0xa3, 0xd1 }, F_OF | F_SF | F_ZF | F_AF | F_PF },
     { "xadd", 3, { 0x0f, 0xc1, 0xd1 }, 0 },
     { "subshl0", 5, { 0x29, 0xd1, 0xc1, 0xe2, 0x00 }, 0 }, /* a shift by 0 leaves SUB's flags */
     { "rcl1", 2, { 0xd1, 0xd1 }, 0 },
@@ -610,6 +612,26 @@ static const struct producer producers[] = {
 
 extern int           run_kernel(void *code);
 extern struct fault  g_fault;
+
+#ifndef HOSTTEST
+static void
+probe_cr4(void)
+{
+    uint32_t value;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(value));
+}
+#endif
+
+/* Used only to keep harness save/restore and diagnostics from faulting.
+   CR4 test instructions still execute inside the exception trampoline
+   even when this read fails; CPUID alone does not establish availability. */
+static void
+cpu_detect_cr4(void)
+{
+#ifndef HOSTTEST
+    g_cpu.has_cr4 = run_kernel((void *) probe_cr4) == 0xff;
+#endif
+}
 
 /* What a test variant is: the bytes under test, what runs before them, and
    whether a jump puts them at the start of a block of their own. */
@@ -672,8 +694,9 @@ struct variant {
 
 /* Forward declarations for focused, manual-derived predicates. */
 static void oracle_selfcheck(void);
-static void x87_arch_cases(const char *name);
+static void projection_selfcheck(void);
 static void threednow_arch_cases(const char *name);
+static void x87_arch_cases(const char *name);
 static void emms_arch_cases(const char *name);
 
 
@@ -1203,7 +1226,7 @@ capture(const struct variant *v, struct kout *o, uint8_t *slot, int vec, int mem
 
 /* What is running, for the reports. */
 static const struct variant *g_cur_v;
-static uint8_t              *g_cur_slot, *g_cur_low;
+static uint8_t              *g_cur_slot, *g_cur_low, *g_target_start;
 static uint32_t              g_cur_len, g_cur_low_len;
 
 static void
@@ -1302,7 +1325,7 @@ where_line(void)
 #ifndef HOSTTEST
     uint32_t cr0, cr2, cr3, cr4 = 0;
     __asm__ volatile("mov %%cr0, %0\n\tmov %%cr2, %1\n\tmov %%cr3, %2" : "=r"(cr0), "=r"(cr2), "=r"(cr3));
-    if (g_cpu.has_cpuid)
+    if (g_cpu.has_cr4)
         __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
     puts_("\n ");
     put_kv("cr0", cr0, 8);
@@ -1363,13 +1386,15 @@ regs_line(const char *label, uint32_t fl, const uint32_t *r7)
 
 /* Runs 1-4 disagreed: everything there is to know about this test, then
    stop. */
+static const char *g_oracle_failure;
+
 static void
 stop_mismatch(const struct variant *v, const struct kin *in, const struct kout out[RUNS])
 {
     static const char *const labels[RUNS] = { "run 1 (first execution)", "run 2 (repeat)", "run 3 (repeat)", "run 4 (repeat)" };
-    stop_banner("runs disagree");
+    stop_banner(g_oracle_failure ? "architectural expectation failed" : "defined results disagree");
     vga_quiet = 0;
-    puts_("\n==== STOP: THE FOUR RUNS OF ONE TEST DISAGREE ====\n");
+    puts_(g_oracle_failure ? "\n==== STOP: ARCHITECTURAL EXPECTATION FAILED ====\n" : "\n==== STOP: DEFINED RESULTS DISAGREE ====\n");
     where_line();
     variant_lines(v);
     puts_("  INPUT\n");
@@ -1498,6 +1523,7 @@ emit_body(struct emit *e, const struct variant *v)
         e8(e, 0xeb); /* jmp $+2: the test starts a new block */
         e8(e, 0x00);
     }
+    g_target_start = e->p;
     if (v->emit)
         v->emit(e, v);
     else
@@ -1676,6 +1702,15 @@ run_variant(const struct variant *v)
 #ifdef ORACLES_ONLY
     if (!v->expect) return;
 #endif
+#ifdef RUN_SKIP
+    for (const char *p=RUN_SKIP; *p;) {
+        const char *g=v->group;
+        while (*p && *p!=',' && *p==*g) {p++;g++;}
+        if (!*g && (!*p || *p==',')) return;
+        while (*p && *p!=',') p++;
+        if (*p==',') p++;
+    }
+#endif
     struct kout out[RUNS];
     struct kin  in;
 
@@ -1820,12 +1855,14 @@ run_variant(const struct variant *v)
     if (out[0].fault != 0xff)
         g_stats.faults++;
     int bad = 0, raw_bad = 0;
+    g_oracle_failure = 0;
     struct kout projected[RUNS];
     int has_defined[RUNS];
     for (int r = 0; r < RUNS; r++) {
         if (v->expect) {
             const char *why = v->expect(v, &in, &out[r]);
             if (why) {
+                g_oracle_failure = why;
                 puts_("ORACLE FAIL: "); puts_(why); putch('\n');
                 bad = 1;
             }
@@ -2143,6 +2180,19 @@ ref_check(const char *name, int skipped)
 static void
 group_begin(const char *name)
 {
+#ifdef RUN_SKIP
+    if (!g_counting) {
+        const char *p=RUN_SKIP;
+        while (*p) {
+            const char *g=name;
+            while (*p && *p!=',' && *p==*g) {p++;g++;}
+            if (!*g && (!*p || *p==',')) {puts_("EXCLUDED ");puts_(name);puts_(" by --skip\n");break;}
+            while (*p && *p!=',') p++;
+            if (*p==',') p++;
+        }
+    }
+#endif
+
     memset(&g_stats, 0, sizeof(g_stats));
 #ifdef RUN_ONLY
     /* build.py --only: groups whose names start with none of the
@@ -2248,6 +2298,7 @@ cmain(uint32_t rom_base)
     idt_init();
     putch('p');
     cpu_detect();
+    cpu_detect_cr4();
     putch('e');
     e820_read();
     putch('m');
@@ -2274,7 +2325,11 @@ cmain(uint32_t rom_base)
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
 #endif
 
+    projection_selfcheck();
     oracle_selfcheck();
+#ifdef ORACLE_SELFTEST_ONLY
+    return;
+#endif
     puts_("\nCPUTEST 4 load=");
     puthex(rom_base, 5);
     puts_(" source=" TEST_SOURCE_ID);

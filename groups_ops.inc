@@ -335,6 +335,10 @@ dm_shift(const struct variant *v, const struct kin *in, struct kout *d, uint16_t
     int      op = v->fx_arg, size = v->arg;
     unsigned c  = count_of(v, in);
 
+    /* Intel's SAL and SHL encodings both use /4. /6 is an undocumented
+       alias on some models, not a portable architectural result. */
+    if (op == 6)
+        return 0;
     if (d->fault != 0xff || !c)
         return 1; /* a zero count changes nothing */
     if (op < 4) { /* ROL ROR RCL RCR: CF, and OF for a count of 1 */
@@ -546,6 +550,85 @@ dm_cx8(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *
     return 1;
 }
 
+/* Intel486 3.11.6/3.11.7 and instruction entries XADD/CMPXCHG:
+   independently calculate data and all six arithmetic flags. Do not use
+   the first execution as the expected answer. Width is explicit so the
+   model also covers high-byte aliases and identical operands. */
+static uint32_t
+oracle_opnd(const struct kout *o, int r, int size)
+{
+    if (r == RM_MEM) return le32(o->buf + MEM_OFF) & szmask(size);
+    if (size == 8) return (*kout_reg((struct kout *)o, r & 3) >> (r < 4 ? 0 : 8)) & 255;
+    return *kout_reg((struct kout *)o, r) & szmask(size);
+}
+
+static void
+oracle_set_opnd(struct kout *o, int r, int size, uint32_t value)
+{
+    if (r == RM_MEM) {put_le(o->buf + MEM_OFF, value, size / 8); return;}
+    unsigned shift = size == 8 && r >= 4 ? 8 : 0;
+    uint32_t mask = szmask(size) << shift;
+    uint32_t *reg = kout_reg(o, size == 8 ? r & 3 : r);
+    *reg = (*reg & ~mask) | ((value << shift) & mask);
+}
+
+static uint32_t
+oracle_addsub_flags(uint32_t a, uint32_t b, int size, int sub)
+{
+    uint32_t mask = szmask(size), sign = 1u << (size - 1);
+    uint32_t r = (sub ? a - b : a + b) & mask;
+    unsigned parity = 0;
+    for (unsigned i = 0; i < 8; i++) parity ^= (r >> i) & 1;
+    return ((sub ? a < b : (uint64_t)a + b > mask) ? F_CF : 0)
+        | (!parity ? F_PF : 0) | ((a ^ b ^ r) & F_AF)
+        | (!r ? F_ZF : 0) | (r & sign ? F_SF : 0)
+        | (((sub ? a ^ b : ~(a ^ b)) & (a ^ r) & sign) ? F_OF : 0);
+}
+
+static const char *
+expect_cx(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    unsigned n = 0, size = 32, locked = 0;
+    if (v->target[n] == 0xf0) {locked = 1; n++;}
+    if (v->target[n] == 0x66) {size = 16; n++;}
+    n++; /* 0F */
+    unsigned op = v->target[n++], modrm = v->target[n];
+    unsigned src = (modrm >> 3) & 7, dst = (modrm & 0xc0) == 0xc0 ? modrm & 7 : RM_MEM;
+    if ((locked && dst != RM_MEM) || (op == 0xc7 && dst != RM_MEM))
+        return o->fault != 6 ? "illegal CMPXCHG/XADD encoding must raise #UD" : 0;
+    if (o->fault != 0xff) return "valid CMPXCHG/XADD unexpectedly faulted";
+    struct kout expected;
+    memset(&expected, 0, sizeof(expected));
+    for (unsigned r = 0; r < 8; r++) if (r != R_ESP) *kout_reg(&expected,r) = kin_reg(in,r);
+    memcpy(expected.buf,in->buf,BUF_SIZE);
+    uint32_t flags, flag_mask = F_ARITH;
+    if (op == 0xc7) {
+        uint32_t lo=le32(in->buf+MEM_OFF), hi=le32(in->buf+MEM_OFF+4);
+        int equal=in->eax==lo && in->edx==hi;
+        if (equal) {put_le(expected.buf+MEM_OFF,in->ebx,4);put_le(expected.buf+MEM_OFF+4,in->ecx,4);}
+        else {expected.eax=lo;expected.edx=hi;}
+        flags=equal?F_ZF:0;flag_mask=F_ZF;
+    } else {
+        if (!(op & 1)) size=8;
+        uint32_t a=oracle_opnd(&expected,dst,size), b=oracle_opnd(&expected,src,size);
+        if ((op & 0xfe)==0xc0) {
+            flags=oracle_addsub_flags(a,b,size,0);
+            oracle_set_opnd(&expected,src,size,a);
+            oracle_set_opnd(&expected,dst,size,a+b);
+        } else {
+            uint32_t acc=oracle_opnd(&expected,R_EAX,size);
+            flags=oracle_addsub_flags(acc,a,size,1);
+            if (acc==a) oracle_set_opnd(&expected,dst,size,b);
+            else oracle_set_opnd(&expected,R_EAX,size,a);
+        }
+    }
+    for (unsigned r=0;r<8;r++) if(r!=R_ESP && *kout_reg(&expected,r)!=*kout_reg((struct kout *)o,r))
+        return "CMPXCHG/XADD register result violates arithmetic/exchange definition";
+    if(memcmp_(expected.buf,o->buf,BUF_SIZE)) return "CMPXCHG/XADD memory result or adjacent bytes";
+    if((o->flags & flag_mask)!=flags) return "CMPXCHG/XADD arithmetic flags";
+    return 0;
+}
+
 static void
 group_cmpxchg(void)
 {
@@ -554,7 +637,7 @@ group_cmpxchg(void)
     static const uint8_t pairs8[5][2]  = { { 0, 2 }, { 1, 2 }, { 7, 5 }, { RM_MEM, 2 }, { RM_MEM + 1, 2 } };
     static const uint8_t pairs32[5][2] = { { R_EAX, R_EDX }, { R_ECX, R_EDX }, { R_ESI, R_EDI }, { RM_MEM, R_EDX }, { RM_MEM + 1, R_EDX } };
     const char          *name          = "cmpxchg.xadd";
-    struct variant       v             = { .group = name, .fx = FX_CUSTOM, .defmask = dm_alldef };
+    struct variant       v             = { .group = name, .fx = FX_CUSTOM, .defmask = dm_alldef, .expect = expect_cx };
     if (!g_cpu.is486) {
         group_skip(name, "386");
         return;
@@ -615,13 +698,13 @@ group_cmpxchg(void)
     /* XADD r8, r8 with every pair of byte registers (the same one twice,
        high halves on both sides): a recompiler's register allocation for
        byte halves is where it has gone wrong. The flags are an ADD's. */
-    struct variant x = { .group = name };
+    struct variant x = { .group = name, .fx = FX_CUSTOM, .defmask = dm_alldef, .expect = expect_cx };
     for (int m = 0xc0; m <= 0xff; m++) {
         x.target[0]  = 0x0f;
         x.target[1]  = 0xc0;
         x.target[2]  = m;
         x.target_len = 3;
-        run_plain(&x, 1);
+        run_keep(&x, 1);
     }
     group_end(name);
 }

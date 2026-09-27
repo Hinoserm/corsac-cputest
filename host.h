@@ -83,18 +83,11 @@ on_fault(int sig, siginfo_t *si, void *ctx)
     ucontext_t *uc = ctx;
     greg_t     *g  = uc->uc_mcontext.gregs;
     (void) si;
-    g_fault.vec    = g[REG_TRAPNO]; /* preserve #DE versus x87 #MF */
-    if (sig == SIGTRAP) {
-        /* INT3, INT 3 and ICEBP: a trap, EIP already past the instruction. */
-        const uint8_t *ip = (const uint8_t *) g[REG_EIP];
-        if (ip[-1] == 0xcc)
-            g_fault.vec = 3;
-        else if (ip[-2] == 0xcd)
-            g_fault.vec = ip[-1];
-        else
-            g_fault.vec = 1;
-    }
-    g_fault.err    = 0;
+    /* The kernel supplies the vector and error code. Looking backwards
+       from EIP cannot distinguish a debug fault from an instruction trap
+       and can fault again at the beginning of a mapped code page. */
+    g_fault.vec    = g[REG_TRAPNO];
+    g_fault.err    = g[REG_ERR];
     g_fault.eip    = g[REG_EIP];
     g_fault.eflags = g[REG_EFL];
     g_fault.eax    = g[REG_EAX];

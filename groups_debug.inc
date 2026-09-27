@@ -134,6 +134,21 @@ emit_lbr(struct emit *e, const struct variant *v)
     ebytes(e, clear, sizeof(clear));
 }
 
+/* PPro Vol. 3 10.4: BTF waits for a taken control transfer; LBR reports
+   the branch source and destination. These are independent assertions. */
+static const char *
+expect_btf_lbr(const struct variant *v,const struct kin *in,const struct kout *o)
+{
+    static const uint8_t trap_offset[]={15,17,14};
+    if (v->arg3==1)
+        return o->fault!=0xff || o->esi || o->edi ? "P6 last-branch source/destination" : 0;
+    if (v->arg==3)
+        return o->fault!=0xff ? "BTF trapped without a taken branch" : 0;
+    uint32_t ip=(uint32_t)(g_target_start-g_cur_slot)+trap_offset[v->arg];
+    return o->fault!=1 || o->fault_ip!=ip || !(o->fault_dr6&0x4000) ?
+        "BTF must single-step the taken branch (vector, IP, DR6.BS)" : 0;
+}
+
 static void
 tf_branches(const char *name)
 {
@@ -150,10 +165,12 @@ tf_branches(const char *name)
         return;
     v.before_run = btf_before;
     v.after_run  = btf_after;
+    v.expect     = expect_btf_lbr;
     v.arg3       = 2; /* BTF */
     for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
         memcpy(v.target, seqs[i].b, seqs[i].len);
         v.target_len = seqs[i].len;
+        v.arg = i;
         run_plain(&v, 1);
     }
     v.arg3       = 1; /* LBR */

@@ -73,6 +73,28 @@ struct ring_seq {
     uint8_t  code16;  /* run as 16-bit code (rings 1-3) */
 };
 
+/* Additional defined-result projections for the exact sequences below.
+   Intel 243191-002: SMSW (3-654) leaves the upper word undefined; SLDT
+   (3-652) and STR differ across processor generations. LAR (3-342)
+   leaves bits 19:16 undefined only when it actually loads the result. */
+enum { RDEF_AX = 2, RDEF_LAR_EAX = 3 };
+
+static int
+dm_ring(const struct variant *v, const struct kin *in, struct kout *d, uint16_t *undef)
+{
+    if (!dm_fxarg(v, in, d, undef))
+        return 0;
+    if (d->fault == 0xff || d->fault == 0x30) {
+        if (v->fx_arg == RDEF_AX)
+            d->eax &= 0xffffu;
+        else if (v->fx_arg == RDEF_LAR_EAX && (d->ebx & 0xff))
+            /* These sequences save LAR's ZF in BL before another
+               descriptor instruction can change the flags. */
+            d->eax &= ~0x000f0000u;
+    }
+    return 1;
+}
+
 static int
 ring_begin(const char *name, uint32_t cr4, uint32_t cr0)
 {
@@ -112,7 +134,7 @@ ring_run_more(const char *name, const struct ring_seq *seqs, unsigned n, uint32_
               void (*emit)(struct emit *, const struct variant *), void (*more)(const char *name))
 {
     struct variant v = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
-                         .fix_input = fix_ring, .reg_fix = 0, .fx = FX_CUSTOM, .defmask = dm_fxarg, .emit = emit };
+                         .fix_input = fix_ring, .reg_fix = 0, .fx = FX_CUSTOM, .defmask = dm_ring, .emit = emit };
     if (!ring_begin(name, cr4, cr0))
         return;
     for (unsigned i = 0; i < n; i++) {
@@ -175,9 +197,9 @@ rx_run(struct variant *v, const struct rx_seq *seqs, unsigned n)
     { r, 0, 0, 0, RF_MEM, 1, SEQ(0x8b, 0x03, 0x89, 0x4b, 0x04) }, /* mov eax, [ebx]; mov [ebx+4], ecx */ \
     { r, 0, 0, 0, RF_NONE, 1, SEQ(0x52, 0x51, 0x5e, 0x5f) }, /* push edx; push ecx; pop esi; pop edi */ \
     { r, 0, 0, 0, RF_NONE, 1, SEQ(0x9c, 0x5e) },             /* pushfd; pop esi: IOPL as entered */ \
-    { r, 0, 0, 0, RF_NONE, 1, SEQ(0x0f, 0x01, 0xe0) },       /* smsw eax */        \
-    { r, 0, 0, 0, RF_NONE, 1, SEQ(0x0f, 0x00, 0xc8) },       /* str eax */         \
-    { r, 0, 0, 0, RF_NONE, 1, SEQ(0x0f, 0x00, 0xc0) },       /* sldt eax */        \
+    { r, 0, 0, 0, RF_NONE, RDEF_AX, SEQ(0x0f, 0x01, 0xe0) }, /* smsw eax */        \
+    { r, 0, 0, 0, RF_NONE, RDEF_AX, SEQ(0x0f, 0x00, 0xc8) }, /* str eax */         \
+    { r, 0, 0, 0, RF_NONE, RDEF_AX, SEQ(0x0f, 0x00, 0xc0) }, /* sldt eax */        \
     { r, 0, 0, 0, RF_MEM, 0, SEQ(0x0f, 0x01, 0x03) },        /* sgdt [ebx] */      \
     { r, 0, 0, 0, RF_NONE, 1, SEQ(0xcd, 0x30) },             /* straight back */
 
@@ -304,8 +326,8 @@ group_r3_seg(void)
         SEGLOAD(3, 0x10, 3), SEGLOAD(3, 0x53, 3), SEGLOAD(3, 0x31, 3), SEGLOAD(3, 0x4b, 3), SEGLOAD(3, 0x48, 3),
         SEGLOAD(3, 0x00, 4), SEGLOAD(3, 0x58, 3), SEGLOAD(3, 0x68, 3),
         SEGLOAD(3, 0x31, 2), SEGLOAD(3, 0x50, 2), SEGLOAD(3, 0x53, 2), SEGLOAD(3, 0x4b, 2),
-        { 3, 0, 0, 0, RF_NONE, 1, SEQ(0x66, 0xb9, 0x10, 0x00, 0x0f, 0x02, 0xc1, 0x0f, 0x94, 0xc3) }, /* lar eax, 10h; setz bl */
-        { 3, 0, 0, 0, RF_NONE, 1, SEQ(0x66, 0xb9, 0x53, 0x00, 0x0f, 0x02, 0xc1, 0x0f, 0x94, 0xc3) },
+        { 3, 0, 0, 0, RF_NONE, RDEF_LAR_EAX, SEQ(0x66, 0xb9, 0x10, 0x00, 0x0f, 0x02, 0xc1, 0x0f, 0x94, 0xc3) }, /* lar eax, 10h; setz bl */
+        { 3, 0, 0, 0, RF_NONE, RDEF_LAR_EAX, SEQ(0x66, 0xb9, 0x53, 0x00, 0x0f, 0x02, 0xc1, 0x0f, 0x94, 0xc3) },
         { 3, 0, 0, 0, RF_NONE, 1, SEQ(0x66, 0xb9, 0x4b, 0x00, 0x0f, 0x00, 0xe1, 0x0f, 0x94, 0xc3) }, /* verr 4Bh */
         { 3, 0, 0, 0, RF_NONE, 1, SEQ(0x66, 0xb9, 0x4b, 0x00, 0x0f, 0x00, 0xe9, 0x0f, 0x94, 0xc3) }, /* verw 4Bh: code, no */
     };
@@ -773,7 +795,8 @@ lar_systypes(const char *name)
         0x0f, 0x94, 0xc5,              /* setz ch */
     };
     struct variant v = { .group = name, .faults_ok = 1, .flags_mask = RING_FMASK, .before_run = ring_setup,
-                         .fix_input = fix_ring, .arg2 = RF_NONE, .fx = FX_CUSTOM, .defmask = dm_fxarg };
+                         .fix_input = fix_ring, .arg2 = RF_NONE, .fx = FX_CUSTOM, .defmask = dm_ring,
+                         .fx_arg = RDEF_LAR_EAX };
     memcpy(v.target, code, sizeof(code));
     v.target_len = sizeof(code);
     for (int t = 0; t < 16; t++) {
@@ -784,8 +807,8 @@ lar_systypes(const char *name)
 
 /* LAR, LSL and VERR at CPL 1 of every descriptor in the ring GDT, with RPL
    0 and 3: which ones ring 1 can see, their access rights and limits.
-   ZF lands in BL after LAR, BH after LSL and CH after VERR. LAR's result
-   has bits the manuals leave undefined, so raw only. */
+   ZF lands in BL after LAR, BH after LSL and CH after VERR. Mask only
+   LAR's undefined result bits when BL says the load succeeded. */
 static void
 group_r1_lar(void)
 {
@@ -802,7 +825,7 @@ group_r1_lar(void)
     int n = 0;
     for (int d = 0; d < RING_GDT_N; d++) {
         for (int rpl = 0; rpl < 4; rpl += 3) {
-            struct ring_seq q = { 1, 0, 0, 0, RF_NONE, 0, sizeof(body), { 0 } };
+            struct ring_seq q = { 1, 0, 0, 0, RF_NONE, RDEF_LAR_EAX, sizeof(body), { 0 } };
             memcpy(q.b, body, sizeof(body));
             q.b[2]    = (d << 3) | rpl;
             seqs[n++] = q;

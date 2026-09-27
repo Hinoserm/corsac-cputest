@@ -96,45 +96,30 @@ group_cmov(void)
     group_end(name);
 }
 
-/* RDTSC twice: the difference must be positive and under 2^28 (the second
-   read can't come before the first, nor a second or so later). The code
-   turns that into EAX = 1 and zeroes everything else it used, so every run
-   gives the same result. Pentium on (CPUID TSC). */
+/* A changing TSC, without assuming an upper scheduler-latency bound.
+   The modular 64-bit difference must be nonzero; the independent
+   predicate prevents four identically frozen reads from passing. */
+static const char *
+expect_rdtsc(const struct variant *v, const struct kin *in, const struct kout *o)
+{
+    return o->fault != 0xff || o->eax != 1 ? "RDTSC did not advance" : 0;
+}
+
 static void
 group_rdtsc(void)
 {
     static const uint8_t seq[] = {
-        0x0f, 0x31,                   /* rdtsc */
-        0x89, 0xc6,                   /* mov esi, eax */
-        0x89, 0xd7,                   /* mov edi, edx */
-        0x0f, 0x31,                   /* rdtsc */
-        0x29, 0xf0,                   /* sub eax, esi */
-        0x19, 0xfa,                   /* sbb edx, edi: EDX:EAX = the difference */
-        0x85, 0xd2,                   /* test edx, edx */
-        0x0f, 0x94, 0xc1,             /* setz cl */
-        0x3d, 0x00, 0x00, 0x00, 0x10, /* cmp eax, 10000000h */
-        0x0f, 0x92, 0xc5,             /* setb ch */
-        0x83, 0xf8, 0x01,             /* cmp eax, 1 */
-        0x0f, 0x93, 0xc2,             /* setae dl */
-        0x20, 0xe9,                   /* and cl, ch */
-        0x20, 0xd1,                   /* and cl, dl */
-        0x0f, 0xb6, 0xc1,             /* movzx eax, cl */
-        0x31, 0xd2,                   /* xor edx, edx */
-        0x31, 0xf6,                   /* xor esi, esi */
-        0x31, 0xff,                   /* xor edi, edi */
-        0x31, 0xc9,                   /* xor ecx, ecx */
+        0x0f,0x31, 0x89,0xc6, 0x89,0xd7, /* first sample */
+        0x0f,0x31, 0x29,0xf0, 0x19,0xfa, /* 64-bit difference */
+        0x09,0xd0, 0x0f,0x95,0xc0, 0x0f,0xb6,0xc0, /* EAX = delta != 0 */
+        0x31,0xd2, 0x31,0xf6, 0x31,0xff, 0x31,0xc9,
     };
-    const char    *name = "rdtsc";
-    struct variant v    = { .group = name };
-
-    if (!(g_cpu.features & CPUID_TSC)) {
-        group_skip(name, "no TSC");
-        return;
-    }
+    const char *name = "rdtsc";
+    struct variant v = {.group=name,.fx=FX_ALU,.fx_arg=6,.expect=expect_rdtsc};
+    if (!(g_cpu.features & CPUID_TSC)) {group_skip(name,"no TSC");return;}
     group_begin(name);
-    memcpy(v.target, seq, sizeof(seq));
-    v.target_len = sizeof(seq);
-    run_plain(&v, 2);
+    memcpy(v.target,seq,sizeof(seq));v.target_len=sizeof(seq);
+    run_plain(&v,2);
     group_end(name);
 }
 

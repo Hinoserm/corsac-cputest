@@ -23,7 +23,7 @@ oracle_after(const struct variant *v)
 #endif
 }
 static const struct oracle_div_case {
-    uint32_t num_lo, num_hi, den_lo, den_hi, result_lo, result_hi, exception;
+    uint32_t num_lo, num_hi, den_lo, den_hi, result_lo, result_hi, exception, c1;
 } div_cases[] = {
     {0,0,          0,0,          0,0xfff80000,1}, /* 0/0: invalid, not ZE */
     {0,0x3ff00000, 0,0,          0,0x7ff00000,4}, /* 1/+0 */
@@ -33,6 +33,7 @@ static const struct oracle_div_case {
     {0,0x7ff80000, 0,0,          0,0x7ff80000,0}, /* QNaN/0: no ZE */
     {0,0,          0,0x40000000, 0,0,0},
     {0,0x40080000, 0,0x40000000, 0,0x3ff80000,0}, /* 3/2 */
+    {0,0x40000000, 0,0x40080000, 0x55555555,0x3fe55555,0x20,0x200}, /* 2/3, PC64 rounds upward */
 };
 static void
 fix_div_oracle(const struct variant *v)
@@ -84,10 +85,11 @@ expect_div(const struct variant *v,const struct kin *in,const struct kout *o)
         return 0;
     }
     if(o->fault!=0xff) return "FDIV unexpectedly trapped before FWAIT";
-    if((o->edi&0x3f)!=c->exception) return "FDIV exception class (IE versus ZE)";
+    if((o->edi&0x23f)!=(c->exception|c->c1)) return "FDIV exception class (IE versus ZE)";
     if((o->edi&0x8080)!=(unmasked?0x8080:0)) return "FDIV pending exception summary";
     if((o->edi&0x3800)!=0x3000) return "FDIV changed TOP";
-    uint32_t lo=unmasked?c->num_lo:c->result_lo,hi=unmasked?c->num_hi:c->result_hi;
+    int suppressed=unmasked && c->exception!=0x20; /* unmasked precision still writes */
+    uint32_t lo=suppressed?c->num_lo:c->result_lo,hi=suppressed?c->num_hi:c->result_hi;
     if(oracle_u32(o->buf+32)!=lo || oracle_u32(o->buf+36)!=hi) return "FDIV numeric result or unmasked destination suppression";
     return 0;
 }
@@ -104,6 +106,7 @@ static const struct empty_case {uint8_t esc,modrm,size,pop;uint32_t lo,hi,ex;} e
     {0xdf,0x53,2,0,0x8000,0,0}, {0xdf,0x5b,2,1,0x8000,0,0},
     {0xdb,0x53,4,0,0x80000000,0,0}, {0xdb,0x5b,4,1,0x80000000,0,0},
     {0xdf,0x7b,8,1,0,0x80000000,0},
+    {0xdf,0x73,10,1,0,0xc0000000,0xffff}, /* FBSTP integer indefinite */
 };
 static void
 fix_empty_oracle(const struct variant *v)
@@ -127,7 +130,7 @@ expect_empty(const struct variant *v,const struct kin *in,const struct kout *o)
 {
     const struct empty_case *c=&empty_cases[v->arg];
     if(o->fault!=0xff) return "empty store unexpectedly trapped before FWAIT";
-    if((o->edi&0x0241)!=0x0041) return "empty store must set IE/SF and clear C1";
+    if((o->edi&0x027f)!=0x0041) return "empty store must set IE/SF and clear C1";
     if((o->edi&0x8080)!=(v->arg2?0x8080:0)) return "empty store exception summary";
     unsigned top=(!v->arg2 && c->pop)?0:7; /* FLD1 made TOP=7 */
     if(((o->edi>>11)&7)!=top || o->esi!=0xffff) return "empty store TOP/tag update";
@@ -209,6 +212,14 @@ static const struct {uint32_t a,b,min,max;} minmax_cases[]={
     {0x80000000,0x3f800000,0,0x3f800000},
     {0xbf800000,0x80000000,0xbf800000,0},
     {0x3f800000,0xbf800000,0xbf800000,0x3f800000},
+    /* AMD 21928 table 1: exponent-zero inputs are zero, including
+       nonzero fraction bits. Tables 11/12 require positive result zero. */
+    {0x00000001,0x80000001,0,0},
+    {0x007fffff,0x3f800000,0,0x3f800000},
+    {0xbf800000,0x807fffff,0xbf800000,0},
+};
+static const uint32_t rsqrt_inputs[]={
+    0,0x80000000,0x40800000,0xc0800000,0x00000001,0x80000001
 };
 static void
 fix_3dnow_oracle(const struct variant *v)
@@ -217,7 +228,7 @@ fix_3dnow_oracle(const struct variant *v)
         g_mmx_in[i]=minmax_cases[v->arg].a;
         g_mmx_in[2+i]=minmax_cases[v->arg].b;
     }
-    if(v->arg3) g_mmx_in[2]=v->arg==0?0:v->arg==1?0x80000000:v->arg==2?0x40800000:0xc0800000;
+    if(v->arg3) g_mmx_in[2]=rsqrt_inputs[v->arg];
 }
 static const char *
 expect_3dnow(const struct variant *v,const struct kin *in,const struct kout *o)
@@ -227,7 +238,7 @@ expect_3dnow(const struct variant *v,const struct kin *in,const struct kout *o)
         uint32_t bits=o->mmx[0],sign=(v->arg&1)?0x80000000u:0;
         if(o->mmx[1]!=bits || (bits&0x80000000u)!=sign) return "PFRSQRT lane replication/sign";
         bits&=0x7fffffff;
-        if(v->arg<2) {if(bits!=0x7f7fffff) return "PFRSQRT zero must saturate to maximum normal";}
+        if(!(rsqrt_inputs[v->arg]&0x7f800000)) {if(bits!=0x7f7fffff) return "PFRSQRT exponent-zero input must saturate to maximum normal";}
         else if(bits<0x3f000000-512 || bits>0x3f000000+512) return "PFRSQRT approximation outside documented precision";
     } else {
         uint32_t want=v->arg2?minmax_cases[v->arg].max:minmax_cases[v->arg].min;
@@ -246,7 +257,7 @@ threednow_arch_cases(const char *name)
     /* The estimate's exact payload is model-dependent, but its bounds,
        sign, zero behavior, and lane replication have explicit predicates. */
     v.fx=FX_UNDEF;
-    for(v.arg=0;v.arg<4;v.arg++)run_keep(&v,1);
+    for(v.arg=0;v.arg<sizeof(rsqrt_inputs)/sizeof(rsqrt_inputs[0]);v.arg++)run_keep(&v,1);
 }
 static const char *
 expect_emms(const struct variant *v,const struct kin *in,const struct kout *o)
@@ -260,4 +271,33 @@ emms_arch_cases(const char *name)
     struct variant v={.group=name,.fx=FX_CUSTOM,.defmask=dm_oracle_x87,.expect=expect_emms};
     const uint8_t bytes[]={0xdb,0xe3,0xd9,0xe8,0x0f,0x77}; /* fninit; fld1; emms */
     memcpy(v.target,bytes,sizeof(bytes));v.target_len=put_fenv(v.target,sizeof(bytes));run_keep(&v,1);
+}
+
+/* Result-projection regression checks use deliberately different raw
+   observations and independently check that defined changes still fail. */
+static void
+projection_selfcheck(void)
+{
+    struct variant v={.fx=FX_CUSTOM,.fx_arg=1};
+    struct kin in={0};struct kout a={0},b={0},pa,pb;
+    const defmask_fn masks[]={dm_exhaust,dm_sample_loop,dm_fxarg};
+    for(unsigned i=0;i<3;i++) {
+        v.defmask=masks[i];memset(&a,0,sizeof(a));b=a;
+        if(i==0)b.ebx=F_AF<<16;
+        if(i==1)b.eax=0x3f123456;
+        if(i==2)b.flags=F_AF;
+        if(!defined_result(&v,&in,&a,&pa)||!defined_result(&v,&in,&b,&pb)||memcmp_(&pa,&pb,sizeof(pa))) {
+            puts_("PROJECTION SELFTEST: undefined observation leaked\n");halt_forever();
+        }
+        b.ebp^=1;
+        defined_result(&v,&in,&b,&pb);
+        if(!memcmp_(&pa,&pb,sizeof(pa))) {puts_("PROJECTION SELFTEST: defined result hidden\n");halt_forever();}
+    }
+    v.defmask=dm_3dnow;v.arg3=1;v.target[0]=0x0f;v.target[1]=0x0e;
+    memset(&a,0,sizeof(a));b=a;b.mmx[3]=0xdeadbeef;
+    defined_result(&v,&in,&a,&pa);defined_result(&v,&in,&b,&pb);
+    if(memcmp_(&pa,&pb,sizeof(pa))) {puts_("PROJECTION SELFTEST: FEMMS payload leaked\n");halt_forever();}
+    b.esi=0xffff;defined_result(&v,&in,&b,&pb);
+    if(!memcmp_(&pa,&pb,sizeof(pa))) {puts_("PROJECTION SELFTEST: tag word hidden\n");halt_forever();}
+    puts_("PROJECTION SELFTEST PASS\n");
 }

@@ -24,13 +24,14 @@ e_abs(struct emit *e, uint8_t op, uint8_t modrm, uint8_t *addr)
    all four start from the same code (a CPU that runs a stale prefetched
    byte would otherwise run it only the first time). */
 static uint8_t *g_smc_patch;
-static uint8_t  g_smc_orig;
+static uint8_t  g_smc_orig[4];
+static unsigned g_smc_size;
 
 static void
 smc_restore(const struct variant *v)
 {
     if (g_smc_patch)
-        *g_smc_patch = g_smc_orig;
+        memcpy(g_smc_patch, g_smc_orig, g_smc_size);
 }
 
 /* Without a jump after the store, a CPU may run the patched instruction as
@@ -77,6 +78,7 @@ emit_smc(struct emit *e, const struct variant *v)
     int      kind = v->arg2;
     uint8_t *store, *l, *top = 0;
 
+    g_smc_size = 1;
     switch (kind) {
         case 0: /* mov [L+1], cl; jmp L; L: mov al, imm8 */
         case 1: /* the same without the jump */
@@ -105,7 +107,8 @@ emit_smc(struct emit *e, const struct variant *v)
             e8(e, 0xbe);
             e32(e, 0);
             put_le(store + 2, (uint32_t) (l + 1), 4);
-            g_smc_patch = l + 1; /* the low byte of the dword */
+            g_smc_patch = l + 1;
+            g_smc_size = 4;
             break;
         case 4: /* mov byte [L], 48h; jmp L; L: inc eax (now dec eax) */
             store = e->p;
@@ -142,7 +145,7 @@ emit_smc(struct emit *e, const struct variant *v)
             g_smc_patch = l + 2;
             break;
     }
-    g_smc_orig = *g_smc_patch;
+    memcpy(g_smc_orig, g_smc_patch, g_smc_size);
 }
 
 /* Code in device memory: a routine written into off-screen VGA text

@@ -715,8 +715,8 @@ group_smp_start(void)
 }
 
 /* IPIs from the BSP to each started processor (physical, fixed vector
-   50h; then NMI) and to all but itself (51h); logical flat, each AP its
-   own LDR bit, all of them in one IPI (52h). EAX: every physical IPI
+   50h; then NMI) and to all but itself (51h); logical flat, batches of
+   up to seven APs with one LDR bit each (52h). EAX: every physical IPI
    taken exactly once; ECX: the NMIs; EDX: the broadcast (each AP once,
    the BSP not); ESI: the logical one; EDI: every AP answered. */
 static void
@@ -738,7 +738,7 @@ group_smp_ipi(void)
     group_begin(name);
     uint32_t f[5] = { 0 };
     if (!g_counting) {
-        uint32_t own = lapic_rd(LAPIC_ID) >> 24, mask = 0;
+        uint32_t own = lapic_rd(LAPIC_ID) >> 24;
         f[0] = f[1] = f[2] = f[3] = f[4] = 1;
         for (int t = 1; t <= g_ap_count; t++) {
             uint32_t id = g_pc[t].apic_id & 15;
@@ -752,14 +752,21 @@ group_smp_ipi(void)
             ipi(id, 0x00004400); /* NMI */
         }
         ipi(0, 0x000c4051); /* all excluding self, vector 51h */
-        for (int t = 1; t <= g_ap_count; t++) {
-            f[4] &= ap_do(t, AP_CMD_LDR, 1u << (24 + t));
-            mask |= 1u << t;
-        }
         uint32_t ldr = lapic_rd(LAPIC_LDR); /* the BSP out of it: nothing it can't take */
         lapic_wr(LAPIC_LDR, 0);
-        ipi(mask, 0x00004852); /* fixed, logical, vector 52h */
-        delay_us(10000);
+        /* PPro vol. 3, 7.4.6.2/3: the logical ID is only eight bits.
+           Use at most seven per batch, keeping the destination distinct
+           from FFh; processors outside the batch have logical ID zero. */
+        for (int first = 1; first <= g_ap_count; first += 7) {
+            uint32_t mask = 0;
+            for (int t = 1; t <= g_ap_count; t++) {
+                uint32_t bit = t >= first && t < first + 7 ? 1u << (t - first) : 0;
+                f[4] &= ap_do(t, AP_CMD_LDR, bit << 24);
+                mask |= bit;
+            }
+            f[4] &= ipi(mask, 0x00004852); /* fixed, logical, vector 52h */
+            delay_us(10000);
+        }
         lapic_wr(LAPIC_LDR, ldr);
         for (int t = 1; t <= g_ap_count; t++) {
             uint32_t id = g_pc[t].apic_id & 15;

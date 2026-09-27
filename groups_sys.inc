@@ -14,7 +14,7 @@ sys_before(const struct variant *v)
 {
 #ifndef HOSTTEST
     __asm__ volatile("mov %%cr0, %0\n\tmov %%cr3, %1" : "=r"(g_saved_cr0), "=r"(g_saved_cr3));
-    if (g_cpu.has_cpuid)
+    if (g_cpu.has_cr4)
         __asm__ volatile("mov %%cr4, %0" : "=r"(g_saved_cr4));
 #endif
 }
@@ -24,7 +24,7 @@ sys_after(const struct variant *v)
 {
 #ifndef HOSTTEST
     __asm__ volatile("mov %0, %%cr0\n\tjmp 1f\n1:\n\tmov %1, %%cr3" : : "r"(g_saved_cr0), "r"(g_saved_cr3) : "memory");
-    if (g_cpu.has_cpuid)
+    if (g_cpu.has_cr4)
         __asm__ volatile("mov %0, %%cr4" : : "r"(g_saved_cr4));
 #endif
 }
@@ -83,7 +83,8 @@ put_crwrite(uint8_t *t, int cr, uint32_t set, uint32_t clear)
 }
 
 /* CR0: each flag set or cleared alone (read back in ECX), NW without CD
-   (#GP), CD with and without NW, and reserved bits. PE and PG are left
+   (#GP on Intel; a valid cache mode on Cyrix 5x86/6x86), CD with and
+   without NW, and reserved bits. PE and PG are left
    alone: clearing one or setting the other takes the harness with it. */
 static void
 group_cr0_write(void)
@@ -95,7 +96,7 @@ group_cr0_write(void)
         { 1u << 1, 0, 1 }, { 1u << 2, 0, 1 }, { 1u << 3, 0, 1 }, { 1u << 5, 0, 1 }, { 1u << 16, 0, 1 }, { 1u << 18, 0, 1 },
         { 0, 1u << 1, 1 }, { 0, 1u << 5, 1 }, { 0, 1u << 16, 1 },
         { 0, 1u << 4, 0 },                     /* ET: hard-wired on some models */
-        { 1u << 29, 1u << 30, 1 },             /* NW without CD: #GP */
+        { 1u << 29, 1u << 30, 1 },             /* NW without CD: CPU-specific cache mode */
         { 1u << 30, 1u << 29, 1 },             /* CD alone */
         { (1u << 30) | (1u << 29), 0, 1 },     /* CD and NW */
         { 1u << 6, 0, 0 }, { 1u << 17, 0, 0 }, { 1u << 28, 0, 0 }, /* reserved */

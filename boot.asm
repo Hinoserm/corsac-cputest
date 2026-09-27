@@ -13,6 +13,7 @@ LOAD_SEG equ 0x2000                     ; 20000h: some BIOSes (ASUS, Award Medal
 
 start:
         cli
+        cld
         xor     ax, ax
         mov     ds, ax
         mov     es, ax
@@ -101,7 +102,7 @@ chs:
         inc     word [lba]
         mov     ax, [lba]
         cmp     ax, IMAGE_SECTORS + 1
-        jbe     .next
+        jb      .next
 
 loaded:
         ; What was read must be what was written: the 16-bit sum of all its

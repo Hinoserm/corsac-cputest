@@ -456,7 +456,9 @@ group_mov_forms(void)
             v.target_len = n;
             v.arg2       = base;
             v.norm       = 1 << base;
-            run_plain(&v, 1);
+            /* ECX can be the base. ADD ECX,EDX would replace the prepared
+               sandbox address before the MOV is reached. */
+            run_keep(&v, 1);
         }
     }
     v.arg2 = R_EBX;
@@ -488,7 +490,8 @@ group_mov_forms(void)
             v.target_len = seqs[i].len;
             /* mov ebx, [ebx] leaves random data in EBX, not an address */
             v.norm = seqs[i].b[0] == 0x8b && seqs[i].b[1] == 0x1b ? 0 : 1 << R_EBX;
-            run_plain(&v, 2);
+            /* Indexed forms rely on fix_movmem's bounded ECX. */
+            run_keep(&v, 2);
         }
     }
     group_end(name);
@@ -626,7 +629,6 @@ group_prefixes(void)
             v.fx_arg = seqs[i].b[1] & 15;
             run_flags(&v, 1);
         } else {
-            v.fx = FX_NONE;
             run_plain(&v, 2);
         }
     }
