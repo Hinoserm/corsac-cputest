@@ -1569,8 +1569,11 @@ fix_xlat(const struct variant *v)
         g_in.eax = (g_in.eax & ~0xffu) | (rnd() & 31);
 }
 
-/* XLAT with an override (ES:, CS:), with a null FS (#GP), and in 16-bit
-   addressing (BX; the low buffer). */
+/* XLAT with an override (ES:, CS:), with a null FS (#GP), in 16-bit
+   addressing (BX; the low buffer), and through a 64 KB ES (selector 20h)
+   after the slot's own loads from high addresses: its limit check must be
+   on XLAT's own address, not the last operand's (86Box's new recompiler
+   checked the stale one). */
 static void
 fix_xlat2(const struct variant *v)
 {
@@ -1590,12 +1593,13 @@ static void
 misc_xlat(const char *name)
 {
     static const struct {
-        uint8_t a16, len, b[8];
+        uint8_t a16, len, b[10];
     } seqs[] = {
         { 0, SEQ(0x26, 0xd7) },
         { 0, SEQ(0x2e, 0xd7) },
-        { 0, SEQ(0x66, 0xb9, 0x00, 0x00, 0x8e, 0xe1, 0x64, 0xd7) }, /* fs = 0; fs: xlat */
+        { 0, SEQ(0x66, 0xb9, 0x00, 0x00, 0x8e, 0xe1, 0x64, 0xd7) },       /* fs = 0; fs: xlat */
         { 1, SEQ(0x67, 0xd7) },
+        { 1, SEQ(0x66, 0xb9, 0x20, 0x00, 0x8e, 0xc1, 0x26, 0x67, 0xd7) }, /* es = 20h (64 KB); es: a16 xlat */
     };
     struct variant v    = { .group = name, .faults_ok = 1, .fix_input = fix_xlat2, .reg_fix = 1 };
     for (unsigned i = 0; i < sizeof(seqs) / sizeof(seqs[0]); i++) {
