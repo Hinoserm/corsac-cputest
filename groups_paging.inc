@@ -431,6 +431,11 @@ group_pg_cross(void)
         { 1, 0, SEQ(0x01, 0x53, 0x15) },       /* add [ebx+21], edx */
         { 2, 0, SEQ(0x8b, 0x43, 0x16) },       /* the first page missing instead */
         { 2, 0, SEQ(0x89, 0x4b, 0x16) },
+        /* FPU state loads into the missing page: #PF before any of it is
+           loaded (the missing page starts at EBX+24) */
+        { 1, 0, SEQ(0xd9, 0x23) },                               /* fldenv [ebx]: 28 bytes */
+        { 1, 0, SEQ(0xdd, 0x63, 0xc0) },                         /* frstor [ebx-64]: 108 bytes */
+        { 1, 0, SEQ(0x0f, 0xae, 0x8b, 0x18, 0xff, 0xff, 0xff) }, /* fxrstor [ebx-232]: 512, aligned */
     };
     pg_run_seqs("pg.cross", seqs, sizeof(seqs) / sizeof(seqs[0]), 0);
 }
