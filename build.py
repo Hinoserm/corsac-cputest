@@ -65,7 +65,9 @@ def main():
     run(["nasm", "-f", "elf32", "-o", "rt.o", os.path.join(HERE, "rt.asm")])
     extra = dump_flags() + only_flags()
     run(["gcc"] + CFLAGS + extra + ["-I", HERE, "-c", "-o", "harness.o", os.path.join(HERE, "harness.c")])
-    run(["ld", "-m", "elf_i386", "-T", os.path.join(HERE, "payload.ld"), "-o", "payload.elf", "rt.o", "harness.o"])
+    # One segment, read, written and run: the tests write code into it
+    run(["ld", "-m", "elf_i386", "--no-warn-rwx-segments", "-T", os.path.join(HERE, "payload.ld"), "-o", "payload.elf",
+         "rt.o", "harness.o"])
     run(["objcopy", "-O", "binary", "payload.elf", "payload.bin"])
 
     payload = os.path.getsize(os.path.join(OUT, "payload.bin"))
