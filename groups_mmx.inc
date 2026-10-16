@@ -560,6 +560,36 @@ group_x87(void)
         }
     }
 
+    /* Two memory forms back to back, the second a divide, in one block:
+       the new recompiler hands the legacy FPU's divide operand to a C helper
+       through a register the IR itself never reads, and dropped the first
+       of two such writes in a block as dead. Every source form, then each
+       divide form; the compare's C0/C2/C3 are the divide's by then. */
+    static const struct {
+        uint8_t esc, digit;
+    } divs[] = {
+        { 0xd8, 6 }, { 0xd8, 7 }, { 0xdc, 6 }, { 0xdc, 7 }, /* fdiv(r) dword, qword */
+        { 0xda, 6 }, { 0xda, 7 }, { 0xde, 6 }, { 0xde, 7 }, /* fidiv(r) dword, word */
+    };
+    for (unsigned o = 0; o < sizeof(memops) / sizeof(memops[0]); o++) {
+        if (!(memops[o].flags & X_SRC) || (memops[o].flags & X_PUSH))
+            continue;
+        for (unsigned d = 0; d < sizeof(divs) / sizeof(divs[0]); d++) {
+            v.target[0]  = memops[o].esc;
+            v.target[1]  = 0x43 | memops[o].digit << 3; /* [ebx+38h] */
+            v.target[2]  = 0x38;
+            v.target[3]  = divs[d].esc;
+            v.target[4]  = 0x43 | divs[d].digit << 3; /* [ebx+30h], ST(6)'s source */
+            v.target[5]  = 0x30;
+            v.target_len = 6;
+            v.arg2       = memops[o].flags & ~X_CC;
+            v.arg        = 7;
+            v.arg3       = row++;
+            v.fx_arg     = 0;
+            run_plain(&v, (v.arg2 & X_INT) ? N_X87_INTS + 1 : 3);
+        }
+    }
+
     /* The hot loop: every rounding mode, with nothing else on the stack
        and with it full, with and without a block boundary in the body. */
     v.emit       = emit_x87_loop;
