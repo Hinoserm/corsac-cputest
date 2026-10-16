@@ -1065,12 +1065,15 @@ canon_stack16(const struct variant *v, const struct kin *in, struct kout *o)
         o->esi -= (uint32_t) g_cur_slot;
 }
 
+/* The bodies emit_stack16 runs on the 16-bit stack */
+#define STACK16_BODIES 9
+
 static void
 emit_stack16(struct emit *e, const struct variant *v)
 {
     static const struct {
         uint8_t len, b[12];
-    } body[] = {
+    } body[STACK16_BODIES] = {
         { SEQ(0x50, 0x59) },                         /* push eax; pop ecx */
         { SEQ(0x66, 0x50, 0x66, 0x5b) },             /* push ax; pop bx */
         { SEQ(0xe8, 0x00, 0x00, 0x00, 0x00, 0x5e) }, /* call $+5; pop esi */
@@ -1078,7 +1081,10 @@ emit_stack16(struct emit *e, const struct variant *v)
         { SEQ(0x60, 0x61) },                         /* pushad; popad */
         { SEQ(0x9c, 0x5e) },                         /* pushfd; pop esi */
         { SEQ(0x6a, 0x7f, 0x8f, 0xc6) },             /* push 7Fh; pop esi */
+        { SEQ(0xc8, 0x04, 0x00, 0x00) },             /* enter 4, 0: EBP from SP, zero-extended */
+        { SEQ(0x66, 0xc8, 0x04, 0x00, 0x00) },       /* enter 4, 0, 16-bit: BP from SP */
     };
+    _Static_assert(sizeof(body) / sizeof(body[0]) == STACK16_BODIES, "STACK16_BODIES");
     int k = v->arg2;
     e8(e, 0x89); /* mov [g_stack_save], esp */
     e8(e, 0x25);
@@ -1114,7 +1120,7 @@ stack_16(const char *name)
 #ifdef HOSTTEST
     return;
 #endif
-    for (int k = 0; k < 7; k++) {
+    for (int k = 0; k < STACK16_BODIES; k++) {
         for (int s = 0; s < 2; s++) {
             v.target[0]  = 0x5a; /* for the reports */
             v.target[1]  = k;
@@ -1155,6 +1161,7 @@ group_stack(void)
         { 1, SEQ(0xc8, 0x04, 0x00, 0x20) },                                  /* enter 4, 32 (= 0) */
         { 1, SEQ(0xc8, 0x04, 0x00, 0x21) },                                  /* enter 4, 33 (= 1) */
         { 1, SEQ(0x66, 0xc8, 0x08, 0x00, 0x03) },                            /* enter, 16-bit */
+        { 1, SEQ(0x66, 0xc8, 0x08, 0x00, 0x00) },                            /* enter 8, 0, 16-bit: BP only */
         { 1, SEQ(0xc9) },                                                    /* leave */
         { 1, SEQ(0x66, 0xc9) },                                              /* leave, 16-bit */
         { 1, SEQ(0xc8, 0x10, 0x00, 0x03, 0xc9) },                            /* enter 16, 3; leave */
