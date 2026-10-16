@@ -719,7 +719,9 @@ put_fenv(uint8_t *t, int n)
    all of it, reserved bytes included; the x87 instruction and operand
    pointers at 8-23 are addresses, so they are cleared after): a save; a
    misaligned one (#GP); a save, a changed ST0/MM0 and a restore (MM0 in
-   the MMX result); and 0F AE with a register operand and /7 (#UD). */
+   the MMX result); 0F AE with a register operand and /7 (#UD); and a
+   save over a pattern in the reserved bytes (464-511, the software's: FXSAVE
+   leaves them as they were). */
 static void
 fx_save(const char *name)
 {
@@ -728,10 +730,24 @@ fx_save(const char *name)
                          .fx_arg = 1, .fix_input = fix_mem_ebx, .arg = MEM_OFF };
     if (!(g_cpu.features & CPUID_FXSR))
         return;
-    for (int k = 0; k < 5; k++) {
+    for (int k = 0; k < 6; k++) {
         uint8_t *t = v.target;
         int      n = 0;
-        if (k < 3) {
+        if (k == 5) {
+            t[n++] = 0xbf; /* mov edi, a+464 */
+            put_le(t + n, a + 464, 4);
+            n += 4;
+            t[n++] = 0xb8; /* mov eax, 5AA5C33Ch */
+            put_le(t + n, 0x5aa5c33c, 4);
+            n += 4;
+            t[n++] = 0xb9; /* mov ecx, 12 */
+            put_le(t + n, 12, 4);
+            n += 4;
+            t[n++] = 0xfc; /* cld; rep stosd */
+            t[n++] = 0xf3;
+            t[n++] = 0xab;
+        }
+        if ((k < 3) || (k == 5)) {
             t[n++] = 0x0f; /* fxsave [a] (misaligned by 8: k 1) */
             t[n++] = 0xae;
             t[n++] = 0x05;
