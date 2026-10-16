@@ -171,6 +171,185 @@ smc_device(const char *name)
     run_plain(&v, 1);
 }
 
+/* Immediates rewritten in a loop: patch the immediate of the instruction
+   under test, jump to it, fold its result and flags into ESI, and go
+   round again, twelve times. A recompiler that compiles immediates in
+   throws the block away at every patch; 86Box's new one reads them from
+   memory instead once a block keeps being rewritten
+   (CODEBLOCK_NO_IMMEDIATES), from about the third pass, and the loop
+   keeps going in that state. Comanche 3 patches shift counts and byte
+   moves this way in its renderer. The jump after each store makes every
+   pass defined.
+
+   EBP counts: the value patched in is EBP masked, plus a base address
+   for the forms that patch an address. A count starts at a different
+   place in each run, so the passes the interpreter takes cover every
+   count between them, and every fourth pass patches a count of 0. */
+struct smc_imm_form {
+    uint8_t  len, b[8]; /* the instruction(s); the patched field is zero here */
+    uint8_t  imm;       /* the patched field's size */
+    int8_t   ioff;      /* its offset in b[]; -1: last */
+    uint8_t  mem;       /* 1: memory at EBX in the buffer; 2: 16-bit addressing in the low buffer */
+    uint8_t  count;     /* a count: see above */
+    uint8_t  step, mask; /* EBP steps by step; mask 0: patched whole */
+    uint8_t  base;      /* added: 1 the address in EBX; 2 the low buffer */
+    uint16_t fmask;     /* the flags folded into ESI: those the instruction defines or leaves */
+};
+
+#define SMC_ALL   0x8d5 /* CF PF AF ZF SF OF */
+#define SMC_LOGIC 0x8c5 /* AF undefined */
+#define SMC_SHIFT 0x0c5 /* CF PF ZF SF: for a non-zero count AF is undefined, and OF past a count of 1 */
+#define SMC_LAST  -1
+
+static const struct smc_imm_form smc_imm_forms[] = {
+    { 2, { 0xb2, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },                 /* mov dl, imm8 */
+    { 2, { 0xb4, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },                 /* mov ah, imm8 */
+    { 4, { 0x66, 0xb8, 0, 0 }, 2, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },        /* mov ax, imm16 */
+    { 5, { 0xb8, 0, 0, 0, 0 }, 4, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },        /* mov eax, imm32 */
+    { 3, { 0xc6, 0xc4, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },           /* mov ah, imm8 (C6) */
+    { 3, { 0xc6, 0x03, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },           /* mov byte [ebx], imm8 */
+    { 5, { 0x66, 0xc7, 0x03, 0, 0 }, 2, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },  /* mov word [ebx], imm16 */
+    { 6, { 0xc7, 0xc0, 0, 0, 0, 0 }, 4, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },  /* mov eax, imm32 (C7) */
+    { 6, { 0xc7, 0x03, 0, 0, 0, 0 }, 4, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },  /* mov dword [ebx], imm32 */
+    { 3, { 0xc0, 0xe0, 0 }, 1, SMC_LAST, 0, 1, 1, 7, 0, SMC_SHIFT },            /* shl al, imm8 */
+    { 3, { 0xc0, 0xf8, 0 }, 1, SMC_LAST, 0, 1, 3, 0, 0, SMC_SHIFT },            /* sar al, imm8: to 31 */
+    { 3, { 0xc0, 0xc4, 0 }, 1, SMC_LAST, 0, 1, 3, 0, 0, SMC_SHIFT },            /* rol ah, imm8: to 31 */
+    { 3, { 0xc0, 0x2b, 0 }, 1, SMC_LAST, 1, 1, 1, 7, 0, SMC_SHIFT },            /* shr byte [ebx], imm8 */
+    { 3, { 0xc0, 0x0b, 0 }, 1, SMC_LAST, 1, 1, 3, 0, 0, SMC_SHIFT },            /* ror byte [ebx], imm8: to 31 */
+    { 4, { 0x66, 0xc1, 0xe8, 0 }, 1, SMC_LAST, 0, 1, 1, 15, 0, SMC_SHIFT },     /* shr ax, imm8 */
+    { 4, { 0x66, 0xc1, 0xc8, 0 }, 1, SMC_LAST, 0, 1, 3, 0, 0, SMC_SHIFT },      /* ror ax, imm8 */
+    { 4, { 0x66, 0xc1, 0x23, 0 }, 1, SMC_LAST, 1, 1, 1, 15, 0, SMC_SHIFT },     /* shl word [ebx], imm8 */
+    { 3, { 0xc1, 0xe0, 0 }, 1, SMC_LAST, 0, 1, 3, 0, 0, SMC_SHIFT },            /* shl eax, imm8 */
+    { 3, { 0xc1, 0x3b, 0 }, 1, SMC_LAST, 1, 1, 3, 0, 0, SMC_SHIFT },            /* sar dword [ebx], imm8 */
+    { 3, { 0xc1, 0x03, 0 }, 1, SMC_LAST, 1, 1, 3, 0, 0, SMC_SHIFT },            /* rol dword [ebx], imm8 */
+    { 5, { 0xc1, 0xc0, 0, 0xd1, 0xc2 }, 1, 2, 0, 1, 1, 1, 0, SMC_SHIFT },       /* rol eax, 0 or 1; rol edx, 1 */
+    { 4, { 0x0f, 0xa4, 0xd0, 0 }, 1, SMC_LAST, 0, 1, 3, 0, 0, SMC_SHIFT },      /* shld eax, edx, imm8 */
+    { 4, { 0x0f, 0xac, 0xd0, 0 }, 1, SMC_LAST, 0, 1, 3, 0, 0, SMC_SHIFT },      /* shrd eax, edx, imm8 */
+    { 5, { 0x66, 0x0f, 0xa4, 0xd0, 0 }, 1, SMC_LAST, 0, 1, 1, 15, 0, SMC_SHIFT }, /* shld ax, dx, imm8 */
+    { 5, { 0x66, 0x0f, 0xac, 0xd0, 0 }, 1, SMC_LAST, 0, 1, 1, 15, 0, SMC_SHIFT }, /* shrd ax, dx, imm8 */
+    { 4, { 0x0f, 0xa4, 0x13, 0 }, 1, SMC_LAST, 1, 1, 3, 0, 0, SMC_SHIFT },      /* shld [ebx], edx, imm8 */
+    { 5, { 0x66, 0x0f, 0xac, 0x13, 0 }, 1, SMC_LAST, 1, 1, 1, 15, 0, SMC_SHIFT }, /* shrd word [ebx], dx, imm8 */
+    { 3, { 0x83, 0xc0, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },           /* add eax, imm8 */
+    { 3, { 0x83, 0xd0, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },           /* adc eax, imm8 */
+    { 3, { 0x83, 0xe0, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_LOGIC },         /* and eax, imm8 */
+    { 3, { 0x83, 0xf8, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },           /* cmp eax, imm8 */
+    { 4, { 0x66, 0x83, 0xe8, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },     /* sub ax, imm8 */
+    { 4, { 0x66, 0x83, 0xda, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },     /* sbb dx, imm8 */
+    { 3, { 0x83, 0x03, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },           /* add dword [ebx], imm8 */
+    { 3, { 0x83, 0x13, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },           /* adc dword [ebx], imm8 */
+    { 4, { 0x66, 0x83, 0x1b, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },     /* sbb word [ebx], imm8 */
+    { 4, { 0x66, 0x83, 0x3b, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },     /* cmp word [ebx], imm8 */
+    { 4, { 0x66, 0x83, 0x0b, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_LOGIC },   /* or word [ebx], imm8 */
+    { 6, { 0x81, 0xc0, 0, 0, 0, 0 }, 4, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_ALL },  /* add eax, imm32 */
+    { 5, { 0x66, 0x81, 0x33, 0, 0 }, 2, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_LOGIC }, /* xor word [ebx], imm16 */
+    { 3, { 0x80, 0x03, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },           /* add byte [ebx], imm8 */
+    { 3, { 0x80, 0x13, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },           /* adc byte [ebx], imm8 */
+    { 3, { 0x80, 0x1b, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },           /* sbb byte [ebx], imm8 */
+    { 3, { 0x80, 0x33, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_LOGIC },         /* xor byte [ebx], imm8 */
+    { 3, { 0x80, 0x3b, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_ALL },           /* cmp byte [ebx], imm8 */
+    { 3, { 0xf6, 0xc4, 0 }, 1, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_LOGIC },         /* test ah, imm8 */
+    { 5, { 0x66, 0xf7, 0xc2, 0, 0 }, 2, SMC_LAST, 0, 0, 0x2b, 0, 0, SMC_LOGIC }, /* test dx, imm16 */
+    { 6, { 0xf7, 0x03, 0, 0, 0, 0 }, 4, SMC_LAST, 1, 0, 0x2b, 0, 0, SMC_LOGIC }, /* test dword [ebx], imm32 */
+    { 3, { 0x6a, 0, 0x58 }, 1, 1, 0, 0, 0x2b, 0, 0, SMC_ALL },                  /* push imm8; pop eax */
+    { 6, { 0x68, 0, 0, 0, 0, 0x5a }, 4, 1, 0, 0, 0x2b, 0, 0, SMC_ALL },         /* push imm32; pop edx */
+    { 5, { 0x66, 0x6a, 0, 0x66, 0x58 }, 1, 2, 0, 0, 0x2b, 0, 0, SMC_ALL },      /* push word imm8; pop ax */
+    { 6, { 0x66, 0x68, 0, 0, 0x66, 0x5a }, 2, 2, 0, 0, 0x2b, 0, 0, SMC_ALL },   /* push word imm16; pop dx */
+    { 3, { 0x8b, 0x43, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0x1c, 0, SMC_ALL },        /* mov eax, [ebx+disp8] */
+    { 4, { 0x8b, 0x44, 0x23, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0x1c, 0, SMC_ALL },  /* mov eax, [ebx+disp8] through a SIB */
+    { 3, { 0x01, 0x53, 0 }, 1, SMC_LAST, 1, 0, 0x2b, 0x1c, 0, SMC_ALL },        /* add [ebx+disp8], edx */
+    { 5, { 0xa1, 0, 0, 0, 0 }, 4, SMC_LAST, 1, 0, 0x2b, 0x1c, 1, SMC_ALL },     /* mov eax, [moffs32] */
+    { 5, { 0xa0, 0, 0, 0, 0 }, 4, SMC_LAST, 1, 0, 0x2b, 0x1f, 1, SMC_ALL },     /* mov al, [moffs32] */
+    { 5, { 0xa3, 0, 0, 0, 0 }, 4, SMC_LAST, 1, 0, 0x2b, 0x1c, 1, SMC_ALL },     /* mov [moffs32], eax */
+    { 6, { 0x66, 0xa3, 0, 0, 0, 0 }, 4, SMC_LAST, 1, 0, 0x2b, 0x1e, 1, SMC_ALL }, /* mov [moffs32], ax */
+    { 4, { 0x67, 0x8a, 0x41, 0 }, 1, SMC_LAST, 2, 0, 0x2b, 7, 0, SMC_ALL },     /* mov al, [bx+di+disp8] */
+    { 5, { 0x67, 0x8a, 0x81, 0, 0 }, 2, SMC_LAST, 2, 0, 0x2b, 7, 0, SMC_ALL },  /* mov al, [bx+di+disp16] */
+    { 5, { 0x67, 0x8a, 0x06, 0, 0 }, 2, SMC_LAST, 2, 0, 0x2b, 15, 2, SMC_ALL }, /* mov al, [disp16] */
+    { 4, { 0x67, 0xa0, 0, 0 }, 2, SMC_LAST, 2, 0, 0x2b, 15, 2, SMC_ALL },       /* mov al, [moffs16] */
+    { 4, { 0x67, 0xa2, 0, 0 }, 2, SMC_LAST, 2, 0, 0x2b, 15, 2, SMC_ALL },       /* mov [moffs16], al */
+};
+
+#define SMC_ITERS 12
+
+/* The run this variant is, 0-5: where a count starts. */
+static int
+smc_imm_slot(const struct variant *v)
+{
+    return 2 * g_case + (v->producer != 0);
+}
+
+static void
+emit_smc_imm(struct emit *e, const struct variant *v)
+{
+    const struct smc_imm_form *f    = &smc_imm_forms[v->arg2];
+    const int                  ioff = (f->ioff == SMC_LAST) ? f->len - f->imm : f->ioff;
+    uint32_t                   base = 0;
+    uint8_t                   *store, *top, *l, *m;
+
+    if (f->base == 1)
+        base = (uint32_t) g_buf + MEM_OFF;
+    else if (f->base == 2)
+        base = (uint32_t) LOWBUF;
+    if (f->count) {
+        e8(e, 0xbd); /* mov ebp, start */
+        e32(e, 3u * f->step * smc_imm_slot(v));
+    }
+    e8(e, 0xbf); /* mov edi, SMC_ITERS */
+    e32(e, SMC_ITERS);
+    top = e->p;
+    e8(e, 0x8b); /* mov ecx, ebp */
+    e8(e, 0xcd);
+    if (f->mask) {
+        e8(e, 0x81); /* and ecx, mask */
+        e8(e, 0xe1);
+        e32(e, f->mask);
+    }
+    if (f->count) {
+        static const uint8_t zero4[] = {
+            0xf7, 0xc7, 0x03, 0, 0, 0, /* test edi, 3 */
+            0x75, 0x02,                /* jnz +2 */
+            0x31, 0xc9,                /* xor ecx, ecx: every fourth pass a count of 0 */
+        };
+        ebytes(e, zero4, sizeof(zero4));
+    }
+    if (base) {
+        e8(e, 0x81); /* add ecx, base */
+        e8(e, 0xc1);
+        e32(e, base);
+    }
+    store = e->p;
+    if (f->imm == 2)
+        e8(e, 0x66);
+    e_abs(e, f->imm == 1 ? 0x88 : 0x89, 0x0d, 0); /* mov [field], cl / cx / ecx */
+    e8(e, 0xeb); /* jmp L */
+    e8(e, 0x00);
+    l = e->p;
+    ebytes(e, f->b, f->len);
+    put_le(store + (f->imm == 2 ? 3 : 2), (uint32_t) (l + ioff), 4);
+    static const uint8_t fold[] = {
+        0x9c,                         /* pushfd */
+        0x81, 0x24, 0x24, 0, 0, 0, 0, /* and dword [esp], fmask */
+        0xc1, 0xc6, 0x05,             /* rol esi, 5 */
+        0x33, 0x34, 0x24,             /* xor esi, [esp] */
+        0x83, 0xc4, 0x04,             /* add esp, 4 */
+        0xc1, 0xc6, 0x05,             /* rol esi, 5 */
+        0x01, 0xc6,                   /* add esi, eax */
+        0x01, 0xd6,                   /* add esi, edx */
+    };
+    m = e->p;
+    ebytes(e, fold, sizeof(fold));
+    put_le(m + 4, f->fmask, 4);
+    if (f->mem == 1) {
+        e8(e, 0x03); /* add esi, [ebx] */
+        e8(e, 0x33);
+    }
+    e8(e, 0x81); /* add ebp, step */
+    e8(e, 0xc5);
+    e32(e, f->count ? f->step : 0x3b5d1f07u);
+    e8(e, 0x4f); /* dec edi */
+    e8(e, 0x75); /* jnz top */
+    e8(e, (uint8_t) (top - (e->p + 1)));
+}
+
 static void
 group_smc(void)
 {
@@ -198,6 +377,23 @@ group_smc(void)
         v.arg3       = 1;
         v.canon      = k == 6 ? canon_smc_loop : kinds[k].defined ? 0 : canon_smc_byte;
         run_plain(&v, 2);
+    }
+    for (unsigned k = 0; k < sizeof(smc_imm_forms) / sizeof(smc_imm_forms[0]); k++) {
+        struct variant w = { .group = name, .emit = emit_smc_imm, .fx = FX_CUSTOM, .defmask = dm_arg3, .arg2 = k, .arg3 = 1 };
+        const struct smc_imm_form *f = &smc_imm_forms[k];
+
+        memcpy(w.target, f->b, f->len); /* the signature for the reports */
+        w.target_len = f->len;
+        if (f->mem == 1) {
+            w.fix_input = fix_mem_ebx;
+            w.arg       = MEM_OFF;
+            if (f->base == 1)
+                w.norm = 1 << R_ECX; /* the address last patched in */
+        } else if (f->mem == 2) {
+            w.fix_input = fix_mem16;
+            w.no_ref    = 1;
+        }
+        run_plain(&w, f->count ? 3 : 2);
     }
     smc_device(name);
     group_end(name);
