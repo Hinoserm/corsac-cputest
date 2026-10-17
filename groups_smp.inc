@@ -619,11 +619,13 @@ ap_start_all(void)
         g_idt_ap[i].zero   = 0;
         g_idt_ap[i].type   = 0x8e;
     }
+    /* Without TS: a task switch in an earlier group leaves it set here, and
+       the AP's FNINIT would take #NM. */
     __asm__ volatile("mov %%cr0, %0" : "=r"(g_ap_cr0));
+    g_ap_cr0 &= ~(1u << 3);
     memcpy((void *) AP_TRAMP, ap_tramp, ap_tramp_end - ap_tramp);
     __asm__ volatile("sgdt %0" : "=m"(*(uint8_t (*)[6]) gdtr));
     memcpy((void *) T_GDTR, gdtr, 6);
-    *(volatile uint32_t *) T_TICKET  = 1;
     *(volatile uint32_t *) T_ARRIVED = 0;
     for (unsigned i = 0; i < g_mp.n_cpus && g_ap_count < AP_MAX; i++) {
         const struct mp_cpu *c = &g_mp.cpu[i];
@@ -632,6 +634,12 @@ ap_start_all(void)
         g_ap_expected++;
         if (c->apic_ver && c->apic_ver < 0x10)
             continue; /* an 82489DX: not started this way */
+        /* The next ticket; one that faulted gives its slot (and stack) to
+           the next processor, as it stays halted. */
+        int t = g_ap_count + 1;
+        *(volatile uint32_t *) T_TICKET = t;
+        g_ap_fault[t * 2] = g_ap_fault[t * 2 + 1] = 0;
+        g_pc[t].state = 0;
         uint32_t before = *(volatile uint32_t *) T_ARRIVED;
         lapic_esr();
         ipi(c->apic_id, 0x0000c500); /* INIT, level, assert */
@@ -644,14 +652,26 @@ ap_start_all(void)
         }
         for (int ms = 0; ms < 200 && *(volatile uint32_t *) T_ARRIVED == before; ms++)
             delay_us(1000);
-        if (*(volatile uint32_t *) T_ARRIVED == before)
+        if (*(volatile uint32_t *) T_ARRIVED == before) {
+            puts_("SMP cpu apic=");
+            puthex(c->apic_id, 2);
+            puts_(" never arrived\n");
             continue;
-        int t = g_ap_count + 1;
+        }
         for (int ms = 0; ms < 200 && !g_pc[t].state && !g_ap_fault[t * 2 + 1]; ms++)
             delay_us(1000);
         if (g_pc[t].state) {
             memcpy(g_ap_entry[t], (const void *) (T_SLOTS + 16 * t), 12);
             g_ap_count++;
+        } else {
+            puts_("SMP cpu apic=");
+            puthex(c->apic_id, 2);
+            if (g_ap_fault[t * 2 + 1]) {
+                puts_(" arrived, then faulted: EIP or error code ");
+                puthex(g_ap_fault[t * 2], 8);
+                putch('\n');
+            } else
+                puts_(" arrived, never reported ready\n");
         }
     }
 }
